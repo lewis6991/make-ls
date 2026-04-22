@@ -1,5 +1,10 @@
 # make-ls
 
+[![CI](https://github.com/lewis6991/makels/actions/workflows/ci.yml/badge.svg)](https://github.com/lewis6991/makels/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/make-ls)](https://pypi.org/project/make-ls/)
+[![Python](https://img.shields.io/pypi/pyversions/make-ls)](https://pypi.org/project/make-ls/)
+[![License](https://img.shields.io/github/license/lewis6991/makels)](LICENSE)
+
 `make-ls` is a Makefile language server written in Python.
 
 It is still early, but it is already useful for real Makefiles. The server uses
