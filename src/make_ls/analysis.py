@@ -45,6 +45,7 @@ MAKE_AUTOMATIC_VARIABLE_RE = re.compile(
 VARIABLE_REFERENCE_DELIMITERS = {"(": ")", "{": "}"}
 RECIPE_BODY_DIRECTIVES = frozenset({"else", "endif", "ifdef", "ifeq", "ifndef", "ifneq"})
 RULE_DIRECTIVES = frozenset(DIRECTIVE_DOCS)
+INCLUDE_DIRECTIVES = frozenset({"include", "-include", "sinclude"})
 VARIABLE_NAME_RE = re.compile(r"^[A-Za-z0-9_.%/@+-]+$")
 
 
@@ -55,6 +56,7 @@ def analyze_document(uri: str, version: int | None, source: str) -> AnalyzedDocu
     phony_targets: set[str] = set()
     occurrences: list[SymbolOccurrence] = []
     recipe_lines: list[RecipeLine] = []
+    recovered_includes, recovered_include_lines = _recover_include_directives(source_lines)
     (
         recovered_target_definitions,
         recovered_target_occurrences,
@@ -81,7 +83,7 @@ def analyze_document(uri: str, version: int | None, source: str) -> AnalyzedDocu
 
     make_diagnostics = _collect_make_syntax_diagnostics(
         source_lines,
-        parsed_lines=recovered_rule_lines | recovered_assignment_lines,
+        parsed_lines=recovered_rule_lines | recovered_assignment_lines | recovered_include_lines,
     )
     unknown_variable_diagnostics = _collect_unknown_variable_diagnostics(
         source,
@@ -95,6 +97,7 @@ def analyze_document(uri: str, version: int | None, source: str) -> AnalyzedDocu
         version=version,
         targets={name: tuple(definitions) for name, definitions in target_map.items()},
         variables={name: tuple(definitions) for name, definitions in variable_map.items()},
+        includes=tuple(recovered_includes),
         phony_targets=frozenset(phony_targets),
         occurrences=tuple(occurrences),
         diagnostics=tuple(
@@ -1027,6 +1030,83 @@ def _recover_variable_references_from_text(
             )
         )
     return occurrences
+
+
+def _recover_include_directives(source_lines: list[str]) -> tuple[list[str], set[int]]:
+    includes: list[str] = []
+    parsed_lines: set[int] = set()
+    in_define_block = False
+    line_number = 0
+
+    while line_number < len(source_lines):
+        line = source_lines[line_number]
+        stripped = line.strip()
+        if _starts_define_block(stripped):
+            in_define_block = True
+            line_number += 1
+            continue
+        if in_define_block:
+            if stripped == "endef":
+                in_define_block = False
+            line_number += 1
+            continue
+
+        if line.startswith("\t") or _continues_previous_top_level_line(source_lines, line_number):
+            line_number += 1
+            continue
+
+        logical_end_line = _logical_top_level_end(source_lines, line_number)
+        recovered_include_paths = _recover_include_paths(
+            source_lines,
+            line_number,
+            logical_end_line,
+        )
+        if not recovered_include_paths:
+            line_number = logical_end_line + 1
+            continue
+
+        includes.extend(recovered_include_paths)
+        parsed_lines.update(range(line_number, logical_end_line + 1))
+        line_number = logical_end_line + 1
+
+    return includes, parsed_lines
+
+
+def _recover_include_paths(
+    source_lines: list[str],
+    start_line: int,
+    end_line: int,
+) -> tuple[str, ...]:
+    logical_parts: list[str] = []
+    for line_number in range(start_line, end_line + 1):
+        text = _strip_make_comment(source_lines[line_number]).strip()
+        if line_number < end_line and text.endswith("\\"):
+            text = text[:-1].rstrip()
+        logical_parts.append(text)
+
+    logical_text = " ".join(part for part in logical_parts if part)
+    if logical_text == "":
+        return ()
+
+    first_token, _separator, remainder = logical_text.partition(" ")
+    if first_token not in INCLUDE_DIRECTIVES:
+        return ()
+
+    return tuple(token for token in remainder.split() if token != "")
+
+
+def _strip_make_comment(text: str) -> str:
+    escaped = False
+    for index, character in enumerate(text):
+        if escaped:
+            escaped = False
+            continue
+        if character == "\\":
+            escaped = True
+            continue
+        if character == "#":
+            return text[:index]
+    return text
 
 
 def _starts_define_block(stripped_line: str) -> bool:

@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 from lsprotocol import types as lsp
 
+from make_ls.types import AnalyzedDocument
+
 from .lsp_harness import LspSession
 
 
@@ -823,17 +825,19 @@ lint_jenkins: jenkins-cli.jar
 
 
 @pytest.mark.asyncio
-async def test_hover_for_target_reference_falls_back_to_sibling_makefile(tmp_path: Path) -> None:
+async def test_hover_for_target_reference_falls_back_to_included_makefile(
+    tmp_path: Path,
+) -> None:
     _ = (tmp_path / "rules.mk").write_text(
         "dep: tool\n\t@echo dep\n\ntool:\n\t@echo tool\n",
         encoding="utf-8",
     )
-    text = "all: dep\n\t@echo done\n"
+    text = "include rules.mk\n\nall: dep\n\t@echo done\n"
 
     async with LspSession(tmp_path) as session:
         uri = await session.open_document("Makefile", text)
         _ = await session.wait_for_diagnostics(uri)
-        hover = await session.hover(uri, 0, 6)
+        hover = await session.hover(uri, 2, 6)
 
     assert hover is not None
     value = hover_value(hover)
@@ -842,17 +846,61 @@ async def test_hover_for_target_reference_falls_back_to_sibling_makefile(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_hover_for_ambiguous_workspace_target_returns_none(tmp_path: Path) -> None:
-    _ = (tmp_path / "a.mk").write_text("dep:\n\t@echo a\n", encoding="utf-8")
-    _ = (tmp_path / "b.mk").write_text("dep:\n\t@echo b\n", encoding="utf-8")
-    text = "all: dep\n\t@echo done\n"
+async def test_hover_for_local_target_does_not_follow_includes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ = (tmp_path / "rules.mk").write_text("all:\n\t@echo remote\n", encoding="utf-8")
+    text = "include rules.mk\n\nall: dep\n\t@echo done\n\ndep:\n\t@echo dep\n"
 
     async with LspSession(tmp_path) as session:
         uri = await session.open_document("Makefile", text)
         _ = await session.wait_for_diagnostics(uri)
-        hover = await session.hover(uri, 0, 6)
+
+        def fail_included_documents(_uri: str) -> tuple[AnalyzedDocument, ...]:
+            raise AssertionError("local hover should not follow includes")
+
+        monkeypatch.setattr(session.server, "included_documents", fail_included_documents)
+        hover = await session.hover(uri, 2, 1)
+
+    assert hover is not None
+    value = hover_value(hover)
+    assert value.startswith("```make\nall: dep\n\t@echo done\n```")
+
+
+@pytest.mark.asyncio
+async def test_hover_for_ambiguous_included_target_returns_none(tmp_path: Path) -> None:
+    _ = (tmp_path / "a.mk").write_text("dep:\n\t@echo a\n", encoding="utf-8")
+    _ = (tmp_path / "b.mk").write_text("dep:\n\t@echo b\n", encoding="utf-8")
+    text = "include a.mk b.mk\n\nall: dep\n\t@echo done\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 2, 6)
 
     assert hover is None
+
+
+@pytest.mark.asyncio
+async def test_hover_for_target_reference_follows_nested_includes(
+    tmp_path: Path,
+) -> None:
+    _ = (tmp_path / "more.mk").write_text("tool:\n\t@echo tool\n", encoding="utf-8")
+    _ = (tmp_path / "rules.mk").write_text(
+        "include more.mk\n\ndep: tool\n\t@echo dep\n",
+        encoding="utf-8",
+    )
+    text = "include rules.mk\n\nall: dep\n\t@echo done\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 2, 6)
+
+    assert hover is not None
+    value = hover_value(hover)
+    assert value.startswith("```make\ndep: tool\n\t@echo dep\n```")
 
 
 @pytest.mark.asyncio
@@ -997,17 +1045,17 @@ async def test_go_to_definition_for_prerequisite(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_go_to_definition_for_prerequisite_falls_back_to_sibling_makefile(
+async def test_go_to_definition_for_prerequisite_falls_back_to_included_makefile(
     tmp_path: Path,
 ) -> None:
     remote_path = tmp_path / "rules.mk"
     _ = remote_path.write_text("dep:\n\t@echo dep\n", encoding="utf-8")
-    text = "all: dep\n\t@echo done\n"
+    text = "include rules.mk\n\nall: dep\n\t@echo done\n"
 
     async with LspSession(tmp_path) as session:
         uri = await session.open_document("Makefile", text)
         _ = await session.wait_for_diagnostics(uri)
-        definition = await session.definition(uri, 0, 6)
+        definition = await session.definition(uri, 2, 6)
 
     location = single_location(definition)
     assert location.uri == remote_path.as_uri()
@@ -1016,19 +1064,19 @@ async def test_go_to_definition_for_prerequisite_falls_back_to_sibling_makefile(
 
 
 @pytest.mark.asyncio
-async def test_go_to_definition_for_ambiguous_workspace_target_returns_all_locations(
+async def test_go_to_definition_for_ambiguous_included_target_returns_all_locations(
     tmp_path: Path,
 ) -> None:
     first_path = tmp_path / "a.mk"
     second_path = tmp_path / "b.mk"
     _ = first_path.write_text("dep:\n\t@echo a\n", encoding="utf-8")
     _ = second_path.write_text("dep:\n\t@echo b\n", encoding="utf-8")
-    text = "all: dep\n\t@echo done\n"
+    text = "include a.mk b.mk\n\nall: dep\n\t@echo done\n"
 
     async with LspSession(tmp_path) as session:
         uri = await session.open_document("Makefile", text)
         _ = await session.wait_for_diagnostics(uri)
-        definition = await session.definition(uri, 0, 6)
+        definition = await session.definition(uri, 2, 6)
 
     assert isinstance(definition, list)
     assert {(location.uri, location.range.start.line) for location in definition} == {
@@ -1038,20 +1086,38 @@ async def test_go_to_definition_for_ambiguous_workspace_target_returns_all_locat
 
 
 @pytest.mark.asyncio
-async def test_go_to_definition_prefers_local_target_over_workspace_fallback(
+async def test_go_to_definition_prefers_local_target_over_included_fallback(
     tmp_path: Path,
 ) -> None:
     _ = (tmp_path / "rules.mk").write_text("dep:\n\t@echo remote\n", encoding="utf-8")
-    text = "all: dep\n\t@echo done\n\ndep:\n\t@echo local\n"
+    text = "include rules.mk\n\nall: dep\n\t@echo done\n\ndep:\n\t@echo local\n"
 
     async with LspSession(tmp_path) as session:
         uri = await session.open_document("Makefile", text)
         _ = await session.wait_for_diagnostics(uri)
-        definition = await session.definition(uri, 0, 6)
+        definition = await session.definition(uri, 2, 6)
 
     location = single_location(definition)
     assert location.uri == uri
-    assert location.range.start.line == 3
+    assert location.range.start.line == 5
+    assert location.range.start.character == 0
+
+
+@pytest.mark.asyncio
+async def test_go_to_definition_follows_nested_includes(tmp_path: Path) -> None:
+    remote_path = tmp_path / "more.mk"
+    _ = remote_path.write_text("dep:\n\t@echo dep\n", encoding="utf-8")
+    _ = (tmp_path / "rules.mk").write_text("include more.mk\n", encoding="utf-8")
+    text = "include rules.mk\n\nall: dep\n\t@echo done\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        definition = await session.definition(uri, 2, 6)
+
+    location = single_location(definition)
+    assert location.uri == remote_path.as_uri()
+    assert location.range.start.line == 0
     assert location.range.start.character == 0
 
 

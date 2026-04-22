@@ -70,6 +70,7 @@ class AnalyzedDocument:
     version: int | None
     targets: dict[str, tuple[TargetDefinition, ...]]
     variables: dict[str, tuple[VariableDefinition, ...]]
+    includes: tuple[str, ...]
     phony_targets: frozenset[str]
     occurrences: tuple[SymbolOccurrence, ...]
     diagnostics: tuple[lsp.Diagnostic, ...]

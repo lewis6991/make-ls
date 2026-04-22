@@ -17,12 +17,12 @@ an owned line-based Make parser and checks recipe shell syntax with `bash -n`.
 - go-to-definition for targets and variables
 - diagnostics for Makefile syntax
 - diagnostics for shell syntax inside recipes
-- same-workspace target lookup across `Makefile`, `makefile`, `GNUmakefile`, and `*.mk`
+- target lookup through explicit `include`, `-include`, and `sinclude` directives
 
 ## What it does not do yet
 
 - full GNU Make evaluation
-- include-aware workspace resolution
+- complete include-path expansion and evaluation
 - completion, rename, references, or code actions
 
 ## Run it
