@@ -14,8 +14,9 @@ Keep the code direct. Own the Make parser. Use `bash -n` for recipe syntax check
 
 Current scope:
 
-- hover and go-to-definition for targets and variables
+- hover, go-to-definition, and references for targets and variables
 - hover for common GNU Make directives, functions, builtin variables, and special targets
+- variable rename
 - Makefile syntax diagnostics
 - recipe shell syntax diagnostics
 - target lookup through explicit include directives

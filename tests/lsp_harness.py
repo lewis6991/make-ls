@@ -33,6 +33,7 @@ class LspSession:
         self.server: MakeLsLanguageServer = create_server()
         self.client = LanguageClient("make-ls-tests", "0.1.0")
         self.diagnostics: asyncio.Queue[lsp.PublishDiagnosticsParams] = asyncio.Queue()
+        self.initialize_result: lsp.InitializeResult | None = None
 
         def capture_diagnostics(
             _client: LanguageClient, params: lsp.PublishDiagnosticsParams
@@ -54,11 +55,17 @@ class LspSession:
             include_headers=False,
         )
 
-        _ = await self.client.initialize_async(
+        # Neovim advertises rename.prepareSupport, which changes how pygls
+        # reports rename capabilities during initialize.
+        self.initialize_result = await self.client.initialize_async(
             lsp.InitializeParams(
                 process_id=None,
                 root_uri=self.root.as_uri(),
-                capabilities=lsp.ClientCapabilities(),
+                capabilities=lsp.ClientCapabilities(
+                    text_document=lsp.TextDocumentClientCapabilities(
+                        rename=lsp.RenameClientCapabilities(prepare_support=True)
+                    )
+                ),
                 workspace_folders=[],
             )
         )
@@ -112,6 +119,23 @@ class LspSession:
         if result is None or isinstance(result, lsp.Location):
             return result
         return [location for location in result if isinstance(location, lsp.Location)]
+
+    async def references(
+        self,
+        uri: str,
+        line: int,
+        character: int,
+        *,
+        include_declaration: bool,
+    ) -> list[lsp.Location] | None:
+        result = await self.client.text_document_references_async(
+            lsp.ReferenceParams(
+                text_document=lsp.TextDocumentIdentifier(uri=uri),
+                position=lsp.Position(line=line, character=character),
+                context=lsp.ReferenceContext(include_declaration=include_declaration),
+            )
+        )
+        return None if result is None else list(result)
 
     async def prepare_rename(
         self, uri: str, line: int, character: int

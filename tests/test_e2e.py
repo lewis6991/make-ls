@@ -28,6 +28,15 @@ def single_location(definition: lsp.Location | list[lsp.Location] | None) -> lsp
     raise AssertionError("expected a single definition location")
 
 
+def location_set(locations: list[lsp.Location] | None) -> set[tuple[str, int, int]]:
+    if locations is None:
+        raise AssertionError("expected reference locations")
+    return {
+        (location.uri, location.range.start.line, location.range.start.character)
+        for location in locations
+    }
+
+
 def apply_text_edits(text: str, edits: list[lsp.TextEdit]) -> str:
     line_offsets: list[int] = []
     offset = 0
@@ -1133,6 +1142,85 @@ async def test_go_to_definition_for_variable_reference(tmp_path: Path) -> None:
     location = single_location(definition)
     assert location.range.start.line == 0
     assert location.range.start.character == 0
+
+
+@pytest.mark.asyncio
+async def test_references_for_target_excludes_declarations_when_requested(tmp_path: Path) -> None:
+    text = "all: dep\nother: dep\ndep:\n\t@echo dep\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        references = await session.references(uri, 2, 1, include_declaration=False)
+
+    assert location_set(references) == {
+        (uri, 0, 5),
+        (uri, 1, 7),
+    }
+
+
+@pytest.mark.asyncio
+async def test_references_for_target_follow_included_makefiles(tmp_path: Path) -> None:
+    remote_path = tmp_path / "rules.mk"
+    _ = remote_path.write_text("dep:\n\t@echo dep\nother: dep\n", encoding="utf-8")
+    text = "include rules.mk\n\nall: dep\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        references = await session.references(uri, 2, 6, include_declaration=True)
+
+    assert location_set(references) == {
+        (uri, 2, 5),
+        (remote_path.as_uri(), 0, 0),
+        (remote_path.as_uri(), 2, 7),
+    }
+
+
+@pytest.mark.asyncio
+async def test_references_for_variable_include_definition_and_references(
+    tmp_path: Path,
+) -> None:
+    text = "FOO := hello\nBAR = $(FOO)\nall:\n\t@echo $(FOO)\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        references = await session.references(uri, 1, 8, include_declaration=True)
+
+    assert location_set(references) == {
+        (uri, 0, 0),
+        (uri, 1, 8),
+        (uri, 3, 9),
+    }
+
+
+@pytest.mark.asyncio
+async def test_references_for_variable_skip_builtin_references_before_local_shadow(
+    tmp_path: Path,
+) -> None:
+    text = "all:\n\t@echo $(MAKE)\nMAKE := wrapper\nlater:\n\t@echo $(MAKE)\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        references = await session.references(uri, 2, 1, include_declaration=True)
+
+    assert location_set(references) == {
+        (uri, 2, 0),
+        (uri, 4, 9),
+    }
+
+
+@pytest.mark.asyncio
+async def test_server_advertises_prepare_rename_support(tmp_path: Path) -> None:
+    async with LspSession(tmp_path) as session:
+        initialize_result = session.initialize_result
+
+    assert initialize_result is not None
+    rename_provider = initialize_result.capabilities.rename_provider
+    assert isinstance(rename_provider, lsp.RenameOptions)
+    assert rename_provider.prepare_provider is True
 
 
 @pytest.mark.asyncio

@@ -145,6 +145,48 @@ def definition_for_position(
     return lsp.Location(uri=document.uri, range=definition.name_span.to_lsp_range())
 
 
+def references_for_position(
+    document: AnalyzedDocument,
+    position: lsp.Position,
+    source_lines: tuple[str, ...],
+    related_documents: tuple[AnalyzedDocument, ...] = (),
+    *,
+    include_declaration: bool,
+) -> list[lsp.Location] | None:
+    occurrence = document.occurrence_at(position.line, position.character)
+    if occurrence is None:
+        return None
+
+    if occurrence.kind == "target":
+        definitions = _definition_target_definitions(document, related_documents, occurrence.name)
+        if occurrence.role == "reference" and not definitions:
+            return []
+
+        return _target_references(
+            (document, *related_documents),
+            occurrence.name,
+            include_declaration=include_declaration,
+        )
+
+    if occurrence.role == "reference" and (
+        _strict_variable_definition_at_position(
+            document,
+            occurrence.name,
+            occurrence.span.start_line,
+            occurrence.span.start_character,
+        )
+        is None
+    ):
+        return []
+
+    return _variable_references(
+        document,
+        occurrence.name,
+        source_lines,
+        include_declaration=include_declaration,
+    )
+
+
 def prepare_rename_for_position(
     document: AnalyzedDocument,
     position: lsp.Position,
@@ -506,6 +548,65 @@ def _definition_target_definitions(
     return tuple(definitions)
 
 
+def _target_references(
+    documents: tuple[AnalyzedDocument, ...],
+    name: str,
+    *,
+    include_declaration: bool,
+) -> list[lsp.Location]:
+    locations: list[lsp.Location] = []
+    seen: set[tuple[str, Span]] = set()
+    for source_document in documents:
+        for occurrence in source_document.occurrences:
+            if occurrence.kind != "target" or occurrence.name != name:
+                continue
+            if not include_declaration and occurrence.role != "reference":
+                continue
+            _append_location(locations, seen, source_document.uri, occurrence.span)
+
+    return locations
+
+
+def _variable_references(
+    document: AnalyzedDocument,
+    name: str,
+    source_lines: tuple[str, ...],
+    *,
+    include_declaration: bool,
+) -> list[lsp.Location]:
+    locations: list[lsp.Location] = []
+    seen: set[tuple[str, Span]] = set()
+
+    if include_declaration:
+        for definition in document.variables.get(name, ()):
+            _append_location(locations, seen, document.uri, definition.name_span)
+
+    # Variable expansion is still modeled conservatively, so references follow
+    # the same same-document, local-definition rules as rename.
+    for occurrence in document.occurrences:
+        if occurrence.kind != "variable" or occurrence.role != "reference":
+            continue
+        if occurrence.name != name:
+            continue
+        if (
+            _strict_variable_definition_at_position(
+                document,
+                name,
+                occurrence.span.start_line,
+                occurrence.span.start_character,
+            )
+            is None
+        ):
+            continue
+
+        name_span = _variable_name_span_for_occurrence(occurrence, source_lines)
+        if name_span is None:
+            continue
+        _append_location(locations, seen, document.uri, name_span)
+
+    return locations
+
+
 def _hover_target_definitions(
     document: AnalyzedDocument,
     related_documents: tuple[AnalyzedDocument, ...],
@@ -597,6 +698,20 @@ def _record_occurrences(
             continue
         occurrences.append(occurrence)
         seen.add(key)
+
+
+def _append_location(
+    locations: list[lsp.Location],
+    seen: set[tuple[str, Span]],
+    uri: str,
+    span: Span,
+) -> None:
+    key = (uri, span)
+    if key in seen:
+        return
+
+    locations.append(lsp.Location(uri=uri, range=span.to_lsp_range()))
+    seen.add(key)
 
 
 def _collect_shell_diagnostics(recipe_lines: list[RecipeLine]) -> list[lsp.Diagnostic]:

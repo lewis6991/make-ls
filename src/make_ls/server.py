@@ -13,6 +13,7 @@ from .analysis import (
     definition_for_position,
     hover_for_position,
     prepare_rename_for_position,
+    references_for_position,
     rename_variable_for_position,
 )
 from .types import AnalyzedDocument
@@ -151,6 +152,26 @@ def create_server() -> MakeLsLanguageServer:
         return definition_for_position(document, params.position, documents[1:])
 
     _ = server.feature(lsp.TEXT_DOCUMENT_DEFINITION)(definition)
+
+    def references(
+        ls: MakeLsLanguageServer, params: lsp.ReferenceParams
+    ) -> list[lsp.Location] | None:
+        document = ls.analyze_uri(params.text_document.uri)
+        text_document = ls.workspace.get_text_document(params.text_document.uri)
+        occurrence = document.occurrence_at(params.position.line, params.position.character)
+        related_documents: tuple[AnalyzedDocument, ...] = ()
+        if occurrence is not None and occurrence.kind == "target":
+            related_documents = ls.included_documents(params.text_document.uri)[1:]
+
+        return references_for_position(
+            document,
+            params.position,
+            tuple(text_document.source.splitlines()),
+            related_documents,
+            include_declaration=params.context.include_declaration,
+        )
+
+    _ = server.feature(lsp.TEXT_DOCUMENT_REFERENCES)(references)
 
     def prepare_rename(
         ls: MakeLsLanguageServer, params: lsp.PrepareRenameParams

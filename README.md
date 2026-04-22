@@ -15,6 +15,8 @@ an owned line-based Make parser and checks recipe shell syntax with `bash -n`.
 - hover for targets and variables
 - hover for common GNU Make directives, functions, builtin variables, and special targets
 - go-to-definition for targets and variables
+- find references for targets and variables
+- rename for variables
 - diagnostics for Makefile syntax
 - diagnostics for shell syntax inside recipes
 - target lookup through explicit `include`, `-include`, and `sinclude` directives
@@ -23,7 +25,7 @@ an owned line-based Make parser and checks recipe shell syntax with `bash -n`.
 
 - full GNU Make evaluation
 - complete include-path expansion and evaluation
-- completion, rename, references, or code actions
+- completion or code actions
 
 ## Run it
 
