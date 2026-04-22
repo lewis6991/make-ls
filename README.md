@@ -13,6 +13,7 @@ It uses an owned Make parser and checks recipe shell syntax with `bash -n`.
 
 - hover, go-to-definition, and references for targets and variables
 - variable rename
+- `check` subcommand for batch diagnostics
 - hover for common GNU Make directives, functions, builtin variables, and special targets
 - diagnostics for Makefile syntax
 - diagnostics for shell syntax inside recipes
@@ -34,6 +35,13 @@ uv tool install make-ls
 
 ```sh
 make-ls
+```
+
+Lint files or directories:
+
+```sh
+make-ls check Makefile rules.mk
+make-ls check .
 ```
 
 For local development:

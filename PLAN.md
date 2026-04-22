@@ -17,6 +17,7 @@ Current scope:
 - hover, go-to-definition, and references for targets and variables
 - hover for common GNU Make directives, functions, builtin variables, and special targets
 - variable rename
+- `check` subcommand for batch diagnostics
 - Makefile syntax diagnostics
 - recipe shell syntax diagnostics
 - target lookup through explicit include directives
