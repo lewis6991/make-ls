@@ -6,6 +6,13 @@ from collections import defaultdict, deque
 
 from lsprotocol import types as lsp
 
+from .builtin_docs import (
+    BUILTIN_VARIABLE_DOCS,
+    DIRECTIVE_DOCS,
+    FUNCTION_DOCS,
+    SPECIAL_TARGET_DOCS,
+    BuiltinDoc,
+)
 from .types import (
     AnalyzedDocument,
     RecipeLine,
@@ -18,6 +25,11 @@ from .types import (
 COMMENT_RE = re.compile(r"^[ ]*#(?P<text>.*)$")
 ENV_STYLE_VARIABLE_RE = re.compile(r"^_?[A-Z][A-Z0-9_]*$")
 TOKEN_RE = re.compile(r"\S+")
+BUILTIN_DIRECTIVE_TOKEN_RE = re.compile(r"-?[A-Za-z][A-Za-z0-9-]*")
+BUILTIN_FUNCTION_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]*")
+BUILTIN_AUTOMATIC_VARIABLE_RE = re.compile(
+    r"\$(?P<simple>[@%<?^+*|])|\$\((?P<paren>[@%<?^+*|][DF]?)\)|\$\{(?P<brace>[@%<?^+*|][DF]?)\}"
+)
 ASSIGNMENT_RE = re.compile(
     r"^(?P<leading>[ ]*)(?P<prefix>(?:(?:export|override|private)\s+)*)"
     r"(?P<name>[A-Za-z0-9_.%/@+-]+)"
@@ -32,27 +44,7 @@ MAKE_AUTOMATIC_VARIABLE_RE = re.compile(
 )
 VARIABLE_REFERENCE_DELIMITERS = {"(": ")", "{": "}"}
 RECIPE_BODY_DIRECTIVES = frozenset({"else", "endif", "ifdef", "ifeq", "ifndef", "ifneq"})
-RULE_DIRECTIVES = frozenset(
-    {
-        "define",
-        "else",
-        "endef",
-        "endif",
-        "ifdef",
-        "ifeq",
-        "ifndef",
-        "ifneq",
-        "-include",
-        "export",
-        "include",
-        "override",
-        "private",
-        "sinclude",
-        "undefine",
-        "unexport",
-        "vpath",
-    }
-)
+RULE_DIRECTIVES = frozenset(DIRECTIVE_DOCS)
 
 
 def analyze_document(uri: str, version: int | None, source: str) -> AnalyzedDocument:
@@ -153,12 +145,17 @@ def hover_for_position(
     document: AnalyzedDocument,
     position: lsp.Position,
     related_documents: tuple[AnalyzedDocument, ...] = (),
+    source_lines: tuple[str, ...] | None = None,
 ) -> lsp.Hover | None:
     occurrence = document.occurrence_at(position.line, position.character)
     if occurrence is None:
-        return None
+        return _builtin_hover_for_position(source_lines, position)
 
     if occurrence.kind == "target":
+        builtin_target_doc = SPECIAL_TARGET_DOCS.get(occurrence.name)
+        if builtin_target_doc is not None:
+            return _render_builtin_hover_result(occurrence.span, builtin_target_doc)
+
         definitions = _hover_target_definitions(document, related_documents, occurrence.name)
         if not definitions:
             return None
@@ -195,7 +192,10 @@ def hover_for_position(
         occurrence.span.start_character,
     )
     if definition is None:
-        return None
+        builtin_variable_doc = BUILTIN_VARIABLE_DOCS.get(occurrence.name)
+        if builtin_variable_doc is None:
+            return None
+        return _render_builtin_hover_result(occurrence.span, builtin_variable_doc)
 
     return lsp.Hover(
         contents=lsp.MarkupContent(
@@ -203,6 +203,126 @@ def hover_for_position(
             value=_render_variable_hover(definition),
         ),
         range=occurrence.span.to_lsp_range(),
+    )
+
+
+def _builtin_hover_for_position(
+    source_lines: tuple[str, ...] | None, position: lsp.Position
+) -> lsp.Hover | None:
+    if source_lines is None or position.line >= len(source_lines):
+        return None
+
+    line_text = source_lines[position.line]
+    builtin_match = _builtin_directive_match(line_text, position.line, position.character)
+    if builtin_match is None:
+        builtin_match = _builtin_function_match(line_text, position.line, position.character)
+    if builtin_match is None:
+        builtin_match = _builtin_automatic_variable_match(
+            line_text, position.line, position.character
+        )
+    if builtin_match is None:
+        return None
+
+    span, builtin_doc = builtin_match
+    return _render_builtin_hover_result(span, builtin_doc)
+
+
+def _builtin_directive_match(
+    line_text: str, line_number: int, character: int
+) -> tuple[Span, BuiltinDoc] | None:
+    if line_text.lstrip(" ").startswith(("\t", "#")):
+        return None
+
+    tokens = tuple(BUILTIN_DIRECTIVE_TOKEN_RE.finditer(line_text))
+    if not tokens:
+        return None
+
+    candidate_tokens: list[re.Match[str]] = []
+    first_token = tokens[0].group(0)
+    if first_token in DIRECTIVE_DOCS:
+        candidate_tokens.append(tokens[0])
+    if (
+        len(tokens) > 1
+        and first_token in {"else", "override"}
+        and tokens[1].group(0) in DIRECTIVE_DOCS
+    ):
+        candidate_tokens.append(tokens[1])
+
+    for token in candidate_tokens:
+        if not (token.start() <= character < token.end()):
+            continue
+        return (
+            Span(line_number, token.start(), line_number, token.end()),
+            DIRECTIVE_DOCS[token.group(0)],
+        )
+
+    return None
+
+
+def _builtin_function_match(
+    line_text: str, line_number: int, character: int
+) -> tuple[Span, BuiltinDoc] | None:
+    for index in range(len(line_text) - 1):
+        if line_text[index] != "$" or line_text[index + 1] not in {"(", "{"}:
+            continue
+        if index > 0 and line_text[index - 1] == "$":
+            continue
+
+        name_match = BUILTIN_FUNCTION_NAME_RE.match(line_text, index + 2)
+        if name_match is None:
+            continue
+
+        name = name_match.group(0)
+        if name not in FUNCTION_DOCS:
+            continue
+
+        # Make functions separate the function name from its arguments with
+        # whitespace, unlike variable references such as `$(CC)` or `${HOME}`.
+        if name_match.end() >= len(line_text) or line_text[name_match.end()] not in {" ", "\t"}:
+            continue
+        if not (name_match.start() <= character < name_match.end()):
+            continue
+
+        return (
+            Span(line_number, name_match.start(), line_number, name_match.end()),
+            FUNCTION_DOCS[name],
+        )
+
+    return None
+
+
+def _builtin_automatic_variable_match(
+    line_text: str, line_number: int, character: int
+) -> tuple[Span, BuiltinDoc] | None:
+    for match in BUILTIN_AUTOMATIC_VARIABLE_RE.finditer(line_text):
+        if match.start() > 0 and line_text[match.start() - 1] == "$":
+            continue
+        if not (match.start() <= character < match.end()):
+            continue
+
+        name = match.group("simple") or match.group("paren") or match.group("brace")
+        if name is None:
+            continue
+
+        builtin_doc = BUILTIN_VARIABLE_DOCS.get(name)
+        if builtin_doc is None:
+            continue
+
+        return (
+            Span(line_number, match.start(), line_number, match.end()),
+            builtin_doc,
+        )
+
+    return None
+
+
+def _render_builtin_hover_result(span: Span, builtin_doc: BuiltinDoc) -> lsp.Hover:
+    return lsp.Hover(
+        contents=lsp.MarkupContent(
+            kind=lsp.MarkupKind.Markdown,
+            value=_render_builtin_hover(builtin_doc),
+        ),
+        range=span.to_lsp_range(),
     )
 
 
@@ -1020,6 +1140,11 @@ def _render_variable_hover(definition: VariableDefinition) -> str:
     return "\n\n".join(lines)
 
 
+def _render_builtin_hover(builtin_doc: BuiltinDoc) -> str:
+    kind_label = f"GNU Make {builtin_doc.kind}"
+    return "\n\n".join([f"```make\n{builtin_doc.signature}\n```", kind_label, builtin_doc.summary])
+
+
 def _leading_comment_block(source_lines: list[str], line_number: int) -> str | None:
     comment_lines: list[str] = []
 
@@ -1200,6 +1325,8 @@ def _should_warn_for_unknown_variable(name: str, occurrence_text: str) -> bool:
     if occurrence_text.startswith("${"):
         return False
     if "$(" in name or "${" in name:
+        return False
+    if name in BUILTIN_VARIABLE_DOCS:
         return False
     if _is_make_automatic_variable_name(name):
         return False

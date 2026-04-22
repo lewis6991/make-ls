@@ -141,7 +141,13 @@ def create_server() -> MakelsLanguageServer:
 
     def hover(ls: MakelsLanguageServer, params: lsp.HoverParams) -> lsp.Hover | None:
         documents = ls.workspace_documents(params.text_document.uri)
-        return hover_for_position(documents[0], params.position, documents[1:])
+        text_document = ls.workspace.get_text_document(params.text_document.uri)
+        return hover_for_position(
+            documents[0],
+            params.position,
+            documents[1:],
+            tuple(text_document.source.splitlines()),
+        )
 
     _ = server.feature(lsp.TEXT_DOCUMENT_HOVER)(hover)
 

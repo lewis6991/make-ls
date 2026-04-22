@@ -337,6 +337,246 @@ async def test_shell_heavy_assignment_does_not_poison_later_rules(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_hover_for_builtin_ifeq_directive(tmp_path: Path) -> None:
+    text = "ifeq ($(MODE),test)\nRESULT := yes\nendif\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 0, 1)
+
+    assert hover is not None
+    value = hover_value(hover)
+    assert value.startswith("```make\nifeq (arg1, arg2)\n```")
+    assert "GNU Make directive" in value
+    assert "two expanded arguments are equal" in value
+
+
+@pytest.mark.asyncio
+async def test_hover_for_builtin_else_directive(tmp_path: Path) -> None:
+    text = "ifeq ($(MODE),test)\nRESULT := yes\nelse\nRESULT := no\nendif\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 2, 1)
+
+    assert hover is not None
+    value = hover_value(hover)
+    assert value.startswith("```make\nelse\n```")
+    assert "alternate branch of a conditional" in value
+
+
+@pytest.mark.asyncio
+async def test_hover_for_builtin_define_directive(tmp_path: Path) -> None:
+    text = "define BODY\n\t@echo hi\nendef\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 0, 2)
+
+    assert hover is not None
+    value = hover_value(hover)
+    assert value.startswith("```make\ndefine variable\n```")
+    assert "multi-line variable definition" in value
+
+
+@pytest.mark.asyncio
+async def test_hover_for_builtin_findstring_function(tmp_path: Path) -> None:
+    text = "X := $(findstring a,$(Y))\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 0, 9)
+
+    assert hover is not None
+    value = hover_value(hover)
+    assert value.startswith("```make\n$(findstring find,in)\n```")
+    assert "Return `find` if it appears in `in`" in value
+
+
+@pytest.mark.asyncio
+async def test_hover_for_builtin_dir_function(tmp_path: Path) -> None:
+    text = "X := $(dir src/foo.c)\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 0, 8)
+
+    assert hover is not None
+    value = hover_value(hover)
+    assert value.startswith("```make\n$(dir names...)\n```")
+    assert "directory part of each file name" in value
+    assert "`./`" in value
+
+
+@pytest.mark.asyncio
+async def test_hover_for_builtin_abspath_function(tmp_path: Path) -> None:
+    text = "X := $(abspath ../foo)\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 0, 10)
+
+    assert hover is not None
+    value = hover_value(hover)
+    assert value.startswith("```make\n$(abspath names...)\n```")
+    assert "absolute path" in value
+    assert "without resolving symlinks" in value
+
+
+@pytest.mark.asyncio
+async def test_hover_for_builtin_make_variable(tmp_path: Path) -> None:
+    text = "all:\n\t$(MAKE) -C subdir\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 1, 4)
+
+    assert hover is not None
+    value = hover_value(hover)
+    assert value.startswith("```make\n$(MAKE)\n```")
+    assert "GNU Make variable" in value
+    assert "The name with which `make` was invoked" in value
+
+
+@pytest.mark.asyncio
+async def test_hover_for_builtin_recursive_make_variables(tmp_path: Path) -> None:
+    text = "vars := $(MAKEOVERRIDES) $(MFLAGS)\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+        makeoverrides_hover = await session.hover(uri, 0, 11)
+        mflags_hover = await session.hover(uri, 0, 28)
+
+    assert diagnostics == []
+
+    assert makeoverrides_hover is not None
+    makeoverrides_value = hover_value(makeoverrides_hover)
+    assert makeoverrides_value.startswith("```make\n$(MAKEOVERRIDES)\n```")
+    assert "command-line variable definitions" in makeoverrides_value
+    assert "`MAKEFLAGS`" in makeoverrides_value
+
+    assert mflags_hover is not None
+    mflags_value = hover_value(mflags_hover)
+    assert mflags_value.startswith("```make\n$(MFLAGS)\n```")
+    assert "Historical compatibility variable" in mflags_value
+    assert "`MAKEFLAGS`" in mflags_value
+
+
+@pytest.mark.asyncio
+async def test_hover_for_builtin_special_variable_and_skips_unknown_warning(
+    tmp_path: Path,
+) -> None:
+    text = "goal := $(.DEFAULT_GOAL)\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 0, 12)
+
+    assert diagnostics == []
+    assert hover is not None
+    value = hover_value(hover)
+    assert value.startswith("```make\n$(.DEFAULT_GOAL)\n```")
+    assert "current default goal" in value
+
+
+@pytest.mark.asyncio
+async def test_hover_for_builtin_shellflags_variable_and_skips_unknown_warning(
+    tmp_path: Path,
+) -> None:
+    text = "flags := $(.SHELLFLAGS)\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 0, 13)
+
+    assert diagnostics == []
+    assert hover is not None
+    value = hover_value(hover)
+    assert value.startswith("```make\n$(.SHELLFLAGS)\n```")
+    assert "Arguments passed to the shell used for recipes" in value
+    assert "`-c`" in value
+
+
+@pytest.mark.asyncio
+async def test_hover_for_builtin_automatic_variables(tmp_path: Path) -> None:
+    text = "all: dep\n\tcp $< $@\ndep:\n\t@echo dep\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        first_prerequisite_hover = await session.hover(uri, 1, 5)
+        target_hover = await session.hover(uri, 1, 8)
+
+    assert first_prerequisite_hover is not None
+    first_value = hover_value(first_prerequisite_hover)
+    assert first_value.startswith("```make\n$<\n```")
+    assert "name of the first prerequisite" in first_value
+
+    assert target_hover is not None
+    target_value = hover_value(target_hover)
+    assert target_value.startswith("```make\n$@\n```")
+    assert "file name of the target" in target_value
+
+
+@pytest.mark.asyncio
+async def test_builtin_variable_hover_does_not_override_local_definition(tmp_path: Path) -> None:
+    text = "MAKE := wrapper\nall:\n\t@echo $(MAKE)\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 2, 10)
+
+    assert hover is not None
+    value = hover_value(hover)
+    assert value.startswith("```make\nMAKE := wrapper\n```")
+    assert "GNU Make variable" not in value
+
+
+@pytest.mark.asyncio
+async def test_hover_for_builtin_special_target_overrides_generic_target_hover(
+    tmp_path: Path,
+) -> None:
+    text = ".PHONY: clean\nclean:\n\t@echo clean\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 0, 1)
+
+    assert hover is not None
+    value = hover_value(hover)
+    assert value.startswith("```make\n.PHONY: targets...\n```")
+    assert "always treated as phony targets" in value
+    assert "Dependency Tree:" not in value
+
+
+@pytest.mark.asyncio
+async def test_builtin_function_hover_does_not_override_variable_hover(tmp_path: Path) -> None:
+    text = "dir := build\nall:\n\t@echo $(dir)\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 2, 9)
+
+    assert hover is not None
+    value = hover_value(hover)
+    assert value.startswith("```make\ndir := build\n```")
+    assert "GNU Make function" not in value
+
+
+@pytest.mark.asyncio
 async def test_hover_for_target_definition(tmp_path: Path) -> None:
     text = "all: dep\n\t@echo done\n\ndep:\n\t@echo dep\n"
 

@@ -65,6 +65,7 @@ Read `PLAN.md` first, then update this file.
 - Added a shell-syntax fallback check for multiline recipes when Tree-sitter Bash rejects valid continued blocks
 - Replaced Tree-sitter with an owned line-based Make parser and `bash -n` shell diagnostics
 - Added same-workspace target hover and go-to-definition fallback across related Makefiles with local-first and ambiguity-aware behavior
+- Added hover for common GNU Make directives and functions using summaries sourced from the official GNU Make manual
 
 ## In Progress
 
@@ -99,6 +100,71 @@ Sessions should keep this file current using the structure below.
 
 ## Session Log
 
+
+### Session Update
+
+- Date: 2026-04-22
+- Summary: Added GNU Make builtin-variable hover entries for `MAKEOVERRIDES` and `MFLAGS`.
+- Files changed: `STATUS.md`, `src/makels/builtin_docs.py`, `tests/test_e2e.py`
+- Commands run: `rg -n "makels|builtin hover|MAKEOVERRIDES|MFLAGS" /Users/lewrus01/.codex/memories/MEMORY.md`, `sed -n '1,120p' STATUS.md`, `rg -n '"MAKEFLAGS"|"MAKEOVERRIDES"|"MFLAGS"|builtin variable' src/makels/builtin_docs.py tests/test_e2e.py src/makels/analysis.py -S`, official GNU Make manual searches for `MAKEOVERRIDES`, `MFLAGS`, and recursive sub-make option propagation, `uv run pytest tests/test_e2e.py -k 'recursive_make_variables'`, `uv run ruff check src/makels/builtin_docs.py tests/test_e2e.py src/makels/analysis.py`, `uv run basedpyright`, `uv run pytest`
+- Results: Hover now covers `$(MAKEOVERRIDES)` and `$(MFLAGS)` alongside the existing `MAKEFLAGS` entry, and the shared builtin-variable path suppresses unknown-variable warnings for them because diagnostics reuse the same builtin catalog. Added a focused end-to-end hover regression for both variables. Verification passed: `ruff check`, `basedpyright`, and `pytest` (`51` tests).
+- Next step: Return to include-aware workspace resolution unless more missing GNU Make builtin docs show up in real files.
+- Blockers: None
+
+
+### Session Update
+
+- Date: 2026-04-22
+- Summary: Claimed a narrow builtin-variable follow-up to add GNU Make `MAKEOVERRIDES` and `MFLAGS` hover docs from the official manual.
+- Files changed: `STATUS.md`
+- Commands run: `rg -n "makels|builtin hover|MAKEOVERRIDES|MFLAGS" /Users/lewrus01/.codex/memories/MEMORY.md`, `sed -n '1,120p' STATUS.md`, `rg -n '"MAKEFLAGS"|"MAKEOVERRIDES"|"MFLAGS"|builtin variable' src/makels/builtin_docs.py tests/test_e2e.py src/makels/analysis.py -S`, official GNU Make manual searches for `MAKEOVERRIDES`, `MFLAGS`, and recursive sub-make option propagation
+- Results: Confirmed `MAKEOVERRIDES` and `MFLAGS` are documented GNU Make builtin variables related to recursive `make` option and command-line variable propagation. The current catalog already covers `MAKEFLAGS` but not these two follow-up variables.
+- Next step: Add both builtin-variable hover entries and a focused end-to-end regression, then rerun the local gate.
+- Blockers: None
+
+
+### Session Update
+
+- Date: 2026-04-22
+- Summary: Filled the missing `.SHELLFLAGS` builtin-variable hover entry and added a focused regression so it stays aligned with the GNU Make special-variable catalog.
+- Files changed: `STATUS.md`, `src/makels/builtin_docs.py`, `tests/test_e2e.py`
+- Commands run: `rg -n "makels|builtin hover|builtin variable" /Users/lewrus01/.codex/memories/MEMORY.md`, `sed -n '1,120p' STATUS.md`, `rg -n "SHELLFLAGS|BUILTIN_VARIABLE_DOCS|special variable" src/makels tests -S`, official GNU Make manual searches for `.SHELLFLAGS` and shell-selection docs, `uv run pytest tests/test_e2e.py -k 'shellflags_variable'`, `uv run ruff check src/makels/builtin_docs.py tests/test_e2e.py src/makels/analysis.py`, `uv run basedpyright`, `uv run pytest`
+- Results: `.SHELLFLAGS` now hovers as a documented GNU Make builtin variable, and the same hover path suppresses unknown-variable warnings for it because builtin-variable diagnostics reuse the shared builtin catalog. Added an end-to-end hover/diagnostic regression for `$(.SHELLFLAGS)`. Verification passed: `ruff check`, `basedpyright`, and `pytest` (`50` tests).
+- Next step: Return to include-aware workspace resolution unless more missing GNU Make builtin docs show up in real files.
+- Blockers: None
+
+
+### Session Update
+
+- Date: 2026-04-22
+- Summary: Added hover for GNU Make builtin variables and special built-in targets using the official manual, including automatic-variable fallback and special-target precedence over generic target hover.
+- Files changed: `README.md`, `STATUS.md`, `src/makels/analysis.py`, `src/makels/builtin_docs.py`, `tests/test_e2e.py`
+- Commands run: `rg -n "makels|makefile language server|builtin hover" /Users/lewrus01/.codex/memories/MEMORY.md`, `sed -n '1,180p' PLAN.md`, `sed -n '1,160p' STATUS.md`, `rg -n "builtin|hover_for_position|_builtin_|automatic variable|special target|\\.PHONY|MAKEFLAGS|CURDIR" src/makels tests -S`, `nl -ba src/makels/analysis.py | sed -n '130,285p'`, `nl -ba src/makels/analysis.py | sed -n '819,910p'`, `nl -ba src/makels/builtin_docs.py | sed -n '1,260p'`, official GNU Make manual searches for automatic variables, other special variables, implicit variables, `MAKE`, `CURDIR`, `MAKEFLAGS`, and special built-in target names, `uv run pytest tests/test_e2e.py -k 'builtin_make_variable or builtin_special_variable or builtin_automatic_variables or builtin_variable_hover_does_not_override_local_definition or special_target_overrides_generic_target_hover'`, `uv run ruff check src/makels/analysis.py src/makels/builtin_docs.py tests/test_e2e.py README.md`, `uv run ruff format src/makels/builtin_docs.py src/makels/analysis.py tests/test_e2e.py README.md STATUS.md`, `uv run ruff check .`, `uv run basedpyright`, `uv run pytest`, `uv run ruff format src/makels/builtin_docs.py src/makels/analysis.py src/makels/server.py tests/test_e2e.py`
+- Results: Hover now covers GNU Make builtin variables such as `MAKE`, `.DEFAULT_GOAL`, and automatic variables like `$<` and `$@`, plus special built-in targets such as `.PHONY`. Special targets override generic target hover, builtin variables only surface when there is no local definition, and unknown-variable diagnostics now skip documented GNU Make builtin variable names so hover and diagnostics stay consistent. Added end-to-end coverage for builtin variables, automatic variables, builtin-variable shadowing, and special-target hover. Full local verification passed: `ruff check`, `basedpyright`, and `pytest` (`49` tests). The attempted `ruff format` run against markdown files failed because markdown formatting is preview-only, so the final formatting pass was rerun on Python files only.
+- Next step: Return to include-aware workspace resolution unless real Makefiles surface more missing GNU Make builtin docs.
+- Blockers: None
+
+
+### Session Update
+
+- Date: 2026-04-22
+- Summary: Added hover for common GNU Make directives and functions using a source-aware fallback after normal target and variable hover misses.
+- Files changed: `README.md`, `STATUS.md`, `src/makels/analysis.py`, `src/makels/builtin_docs.py`, `src/makels/server.py`, `tests/test_e2e.py`
+- Commands run: `sed -n '1,180p' PLAN.md`, `sed -n '1,140p' STATUS.md`, `nl -ba src/makels/analysis.py | sed -n '140,260p'`, `nl -ba src/makels/server.py | sed -n '120,190p'`, `nl -ba tests/test_e2e.py | sed -n '1,220p'`, official GNU Make manual searches for conditionals, functions, multi-line variables, include, export, and override docs, `uv run pytest tests/test_e2e.py -k 'builtin or ifeq_directive or else_directive or define_directive or findstring_function or dir_function or abspath_function'`, `uv run ruff format src/makels/analysis.py src/makels/builtin_docs.py`, `uv run ruff check src/makels/analysis.py --fix`, `uv run ruff format src/makels/builtin_docs.py src/makels/analysis.py`, `uv run ruff check .`, `uv run basedpyright`, `uv run pytest`
+- Results: Hover now falls back to builtin docs when the cursor is on directive-position tokens like `ifeq`, `else`, and `define`, or on Make function names like `findstring`, `dir`, and `abspath` inside `$(` / `${` calls. Builtin hover uses the live buffer text, stays out of the way of real target and variable hover, and is covered by end-to-end tests for directives, functions, and builtin-named variables. Full local verification passed: `ruff check`, `basedpyright`, and `pytest` (`44` tests).
+- Next step: Broaden the builtin catalog with more GNU Make functions only if real files reveal gaps; otherwise return to include-aware workspace resolution.
+- Blockers: None
+
+
+### Session Update
+
+- Date: 2026-04-22
+- Summary: Claimed a builtin-hover slice to add GNU Make directive and function docs to hover from the official manual.
+- Files changed: `STATUS.md`
+- Commands run: `sed -n '1,180p' PLAN.md`, `sed -n '1,140p' STATUS.md`, `git status --short`, `rg -n "hover_for_position|_render_variable_hover|_render_target_hover|occurrence_at|builtin|directive|findstring|ifeq|define|abspath|dir" src/makels tests -S`, `sed -n '140,260p' src/makels/analysis.py`, `sed -n '1,120p' src/makels/types.py`, GNU Make manual searches for conditional syntax, quick reference, text functions, file name functions, include, multi-line variables, override, and export docs
+- Results: Confirmed the current hover path only understands indexed targets and variables, so builtin hover needs a source-aware fallback after normal symbol hover misses. The official GNU Make manual has the right primary-source coverage for directive summaries and common function behavior.
+- Next step: Add builtin hover data and a source-aware fallback for directive and function names, then cover it with end-to-end tests.
+- Blockers: None
 
 ### Session Update
 
