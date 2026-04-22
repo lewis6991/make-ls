@@ -98,31 +98,25 @@ Keep modules narrow and direct. If two modules only call each other through tiny
 
 ### Parsing strategy
 
-Use existing parser libraries instead of hand-writing a parser.
+Use an owned line-based parser for Makefiles.
 
 Preferred approach:
 
-1. Use Tree-sitter for Makefile parsing.
-2. Use Tree-sitter Bash or another real shell parser for recipe shell lines.
+1. Parse top-level statements directly from source lines.
+2. Preserve exact source ranges and rule text from the original document.
+3. Use `bash -n` for recipe-shell syntax validation after Make-specific normalization.
 
 Why:
 
-- concrete ranges for LSP diagnostics and definitions
-- better resilience than regex-only parsing
-- less reinvention
+- the project owns its parsing behavior instead of inheriting third-party parser quirks
+- line-based Make parsing is easier to debug and extend for GNU Make edge cases
+- the current feature slice only needs a compact semantic model, not a full AST
 
 Implementation note:
 
 - Recipes need special handling because Make syntax prefixes lines with tab-indented shell commands and may add command modifiers such as `@`, `-`, and `+`.
 - Strip only the recipe control prefixes that are not part of the shell command before feeding the line to the shell parser.
 - Document any lossy normalization in comments because it is subtle.
-
-If the preferred Tree-sitter package set is awkward in Python, the fallback is:
-
-- keep Tree-sitter for Makefiles
-- use `bashlex` or another real shell parser for shell recipe syntax
-
-Do not fall back to ad hoc shell regex parsing unless every library option is exhausted.
 
 ### Semantic model
 

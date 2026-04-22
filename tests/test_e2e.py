@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -47,6 +48,112 @@ async def test_accepts_empty_variable_assignments(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_recovers_variable_assignments_when_parser_loses_sync(tmp_path: Path) -> None:
+    text = """\
+PREPEND_STDOUT = | awk '{ print "$(CYAN_DIM)$(1):$(NC)", $$0; fflush(); }'
+COLOR_PATTERN = | $(SED) "s/$(1)/$$(printf "$(2)\\\\\\0$(NC)")/g"
+VENV := .venv
+all: $(VENV)
+\t@echo ok
+"""
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 3, 8)
+        definition = await session.definition(uri, 3, 8)
+
+    assert diagnostics == []
+    assert hover is not None
+    assert "VENV := .venv" in hover_value(hover)
+    location = single_location(definition)
+    assert location.range.start.line == 2
+    assert location.range.start.character == 0
+
+
+@pytest.mark.asyncio
+async def test_reports_unterminated_parenthesized_variable_reference_in_recovered_assignment(
+    tmp_path: Path,
+) -> None:
+    text = "BROKEN = $(BAR\nall:\n\t@echo ok\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].range.start.line == 0
+    assert diagnostics[0].message.startswith("Invalid variable reference in assignment")
+
+
+@pytest.mark.asyncio
+async def test_reports_unterminated_braced_variable_reference_in_recovered_assignment(
+    tmp_path: Path,
+) -> None:
+    text = "BROKEN = ${BAR\nall:\n\t@echo ok\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].range.start.line == 0
+    assert diagnostics[0].message.startswith("Invalid variable reference in assignment")
+
+
+@pytest.mark.asyncio
+async def test_warns_for_unknown_variable_reference(tmp_path: Path) -> None:
+    text = "all:\n\t@echo $(missing_var)\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].severity == lsp.DiagnosticSeverity.Warning
+    assert diagnostics[0].message.startswith("Unknown variable reference")
+
+
+@pytest.mark.asyncio
+async def test_does_not_warn_for_env_style_variable_reference(tmp_path: Path) -> None:
+    text = "all:\n\t@echo $(HOME)\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_does_not_warn_for_forward_variable_reference(tmp_path: Path) -> None:
+    text = "BAR = $(foo)\nfoo := hello\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_accepts_make_automatic_variables_in_recipe_shell(tmp_path: Path) -> None:
+    text = """\
+all: dep
+\tcp $< $@
+\tprintf '%s\\n' $^
+dep:
+\t@echo dep
+"""
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
 async def test_reports_shell_syntax_diagnostics_for_recipe_lines(tmp_path: Path) -> None:
     text = "all:\n\t@if true; then echo hi\n"
 
@@ -72,6 +179,164 @@ async def test_reports_multiline_shell_syntax_diagnostics(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_accepts_multiline_recipe_continuations(tmp_path: Path) -> None:
+    text = """\
+prefix := /usr/local
+pkglibdir := /usr/local/lib
+MAJOR := 3
+MINOR := 2
+PATCH := 1
+
+all:
+\tsed \\
+\t\t-e 's#PREFIX#$(prefix)#' \\
+\t\t-e 's#LIBDIR#$(pkglibdir)#' \\
+\t\t-e 's#VERSION#$(MAJOR).$(MINOR).$(PATCH)#' \\
+\t\tlibutf8proc.pc.in > libutf8proc.pc
+"""
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_skips_unknown_variable_warning_for_computed_variable_names(
+    tmp_path: Path,
+) -> None:
+    text = "PAPER := a4\nall:\n\t@echo $(PAPEROPT_$(PAPER))\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_accepts_neovim_style_gnu_make_blocks(tmp_path: Path) -> None:
+    text = (
+        "\n".join(
+            [
+                "ifeq ($(UNIX_LIKE),FALSE)",
+                "  SHELL := powershell.exe",
+                "else",
+                "  CMAKE := $(shell (command -v cmake3 || command -v cmake || echo cmake))",
+                '  CMAKE_GENERATOR ?= "$(shell (command -v ninja > /dev/null 2>&1 '
+                '&& echo "Ninja") || echo "Unix Makefiles")"',
+                "endif",
+                "",
+                "iwyu:",
+                '\tiwyu-fix-includes --only_re="src/nvim" --ignore_re="(src/nvim/eval/encode.c\\',
+                "\t|src/nvim/auto/\\",
+                "\t|src/nvim/os/lang.c\\",
+                "\t|src/nvim/map.c\\",
+                '\t)" --nosafe_headers < build/iwyu.log',
+            ]
+        )
+        + "\n"
+    )
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_recovers_targets_after_gnu_make_parser_desync(tmp_path: Path) -> None:
+    text = (
+        "\n".join(
+            [
+                "ifeq ($(UNIX_LIKE),FALSE)",
+                "  SHELL := powershell.exe",
+                "else",
+                "  CMAKE := $(shell (command -v cmake3 || command -v cmake || echo cmake))",
+                '  CMAKE_GENERATOR ?= "$(shell (command -v ninja > /dev/null 2>&1 '
+                '&& echo "Ninja") || echo "Unix Makefiles")"',
+                "endif",
+                "",
+                "nvim: deps",
+                "\t$(CMAKE) --build build",
+                "",
+                "deps:",
+                "\t@echo deps",
+            ]
+        )
+        + "\n"
+    )
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 7, 1)
+        definition = await session.definition(uri, 7, 6)
+
+    assert diagnostics == []
+    assert hover is not None
+    assert hover_value(hover).startswith("```make\nnvim: deps\n\t$(CMAKE) --build build\n```")
+    location = single_location(definition)
+    assert location.range.start.line == 10
+    assert location.range.start.character == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    shutil.which("bash") is None, reason="requires bash for fallback shell syntax check"
+)
+async def test_accepts_nested_multiline_if_recipe(tmp_path: Path) -> None:
+    text = """\
+all:
+\t@if [ -f build/.ran-cmake ]; then \\
+\t  cached_prefix=$$(printf x); \\
+\t  if ! [ "a" = "$$cached_prefix" ]; then \\
+\t    printf '%s\\n' "$$cached_prefix"; \\
+\t    rm -f build/.ran-cmake; \\
+\t  fi \\
+\tfi
+"""
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_shell_heavy_assignment_does_not_poison_later_rules(tmp_path: Path) -> None:
+    text = (
+        "\n".join(
+            [
+                "ifeq (Windows,$(TARGET_SYS))",
+                "TARGET_TESTUNWIND=$(shell exec 2>/dev/null; echo "
+                "'extern void b(void);int a(void){b();return 0;}' | $(TARGET_CC) -c -x c - "
+                "-o tmpunwind.o && { grep -qa -e eh_frame -e __unwind_info tmpunwind.o || "
+                "grep -qU -e eh_frame -e __unwind_info tmpunwind.o; } && echo E; rm -f "
+                "tmpunwind.o)",
+                "endif",
+                "",
+                "amalg:",
+                '\t$(MAKE) all "LJCORE_O=ljamalg.o"',
+                "",
+                "clean:",
+                "\t@echo clean",
+            ]
+        )
+        + "\n"
+    )
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
 async def test_hover_for_target_definition(tmp_path: Path) -> None:
     text = "all: dep\n\t@echo done\n\ndep:\n\t@echo dep\n"
 
@@ -82,9 +347,274 @@ async def test_hover_for_target_definition(tmp_path: Path) -> None:
 
     assert hover is not None
     value = hover_value(hover)
-    assert value.startswith("```make\nall\n```")
-    assert "Prerequisites: dep" in value
-    assert "Recipe: `echo done`" in value
+    assert value.startswith("```make\nall: dep\n\t@echo done\n```")
+    assert "\n\n---\n\nDependency Tree:\n\n`all`  \n└─\u00a0`dep`" in value
+
+
+@pytest.mark.asyncio
+async def test_hover_for_multitarget_rule_keeps_full_rule_text(tmp_path: Path) -> None:
+    text = "all lint: dep\n\t@echo $^\n\ndep:\n\t@echo dep\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 0, 5)
+
+    assert hover is not None
+    value = hover_value(hover)
+    assert value.startswith("```make\nall lint: dep\n\t@echo $^\n```")
+    assert "\n\n---\n\nDependency Tree:\n\n`lint`  \n└─\u00a0`dep`" in value
+
+
+@pytest.mark.asyncio
+async def test_hover_for_target_definition_includes_recursive_dependency_tree(
+    tmp_path: Path,
+) -> None:
+    text = """\
+all: dep tools
+\t@echo done
+
+dep: lib
+\t@echo dep
+
+tools: helper
+\t@echo tools
+
+lib:
+\t@echo lib
+
+helper:
+\t@echo helper
+"""
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 0, 1)
+
+    assert hover is not None
+    value = hover_value(hover)
+    expected_tree = (
+        "Dependency Tree:\n\n"
+        "`all`  \n"
+        "├─\u00a0`dep`  \n"
+        "│\u00a0\u00a0└─\u00a0`lib`  \n"
+        "└─\u00a0`tools`  \n"
+        "\u00a0\u00a0\u00a0└─\u00a0`helper`"
+    )
+    assert expected_tree in value
+
+
+@pytest.mark.asyncio
+async def test_hover_for_target_definition_deduplicates_shared_dependency_branches(
+    tmp_path: Path,
+) -> None:
+    text = """\
+all: build deps
+\t@echo all
+
+build: | deps
+\t@echo build
+
+deps: prep
+\t@echo deps
+
+prep:
+\t@echo prep
+"""
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 0, 1)
+
+    assert hover is not None
+    value = hover_value(hover)
+    expected_tree = (
+        "Dependency Tree:\n\n"
+        "`all`  \n"
+        "├─\u00a0`build`  \n"
+        "│\u00a0\u00a0└─\u00a0`deps` ...  \n"
+        "└─\u00a0`deps`  \n"
+        "\u00a0\u00a0\u00a0└─\u00a0`prep`"
+    )
+    assert expected_tree in value
+    assert (
+        "│\u00a0\u00a0└─\u00a0`deps`  \n│\u00a0\u00a0\u00a0\u00a0\u00a0└─\u00a0`prep`" not in value
+    )
+
+
+@pytest.mark.asyncio
+async def test_hover_for_target_definition_distinguishes_phony_and_path_targets(
+    tmp_path: Path,
+) -> None:
+    text = """\
+.PHONY: all clean
+all: clean build/output.txt
+\t@echo done
+
+clean:
+\t@echo clean
+"""
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 1, 1)
+
+    assert hover is not None
+    value = hover_value(hover)
+    expected_tree = "Dependency Tree:\n\n*all*  \n├─\u00a0*clean*  \n└─\u00a0`build/output.txt`"
+    assert expected_tree in value
+
+
+@pytest.mark.asyncio
+async def test_hover_for_target_definition_honors_later_phony_declarations(
+    tmp_path: Path,
+) -> None:
+    text = """\
+all: nvim
+\t@echo all
+
+.PHONY: clean
+clean:
+\t@echo clean
+
+.PHONY: nvim
+nvim: clean
+\t@echo nvim
+"""
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 8, 1)
+
+    assert hover is not None
+    value = hover_value(hover)
+    expected_tree = "Dependency Tree:\n\n*nvim*  \n└─\u00a0*clean*"
+    assert expected_tree in value
+
+
+@pytest.mark.asyncio
+async def test_hover_for_target_definition_marks_dependency_cycles(tmp_path: Path) -> None:
+    text = """\
+all: dep
+\t@echo done
+
+dep: all
+\t@echo dep
+"""
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 0, 1)
+
+    assert hover is not None
+    value = hover_value(hover)
+    assert (
+        "Dependency Tree:\n\n`all`  \n└─\u00a0`dep`  \n\u00a0\u00a0\u00a0└─\u00a0`all` (cycle)"
+        in value
+    )
+
+
+@pytest.mark.asyncio
+async def test_hover_for_target_reference_includes_full_multiline_make_rule(
+    tmp_path: Path,
+) -> None:
+    text = """\
+all: lint_jenkins
+\t@echo ok
+
+lint_jenkins: jenkins-cli.jar
+\t$(MRUN) +swdev +oracle/openjdk/17.0.4.1 \\
+\t\tetc_dev/jenkins_lint \\
+\t\t--cli $(PWD)/$^ \\
+\t\t--user $(JENKINS_USER)
+"""
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 0, 6)
+
+    assert hover is not None
+    value = hover_value(hover)
+    assert value.startswith(
+        "```make\n"
+        "lint_jenkins: jenkins-cli.jar\n"
+        "\t$(MRUN) +swdev +oracle/openjdk/17.0.4.1 \\\n"
+        "\t\tetc_dev/jenkins_lint \\\n"
+        "\t\t--cli $(PWD)/$^ \\\n"
+        "\t\t--user $(JENKINS_USER)\n"
+        "```"
+    )
+    assert ("\n\n---\n\nDependency Tree:\n\n`lint_jenkins`  \n└─\u00a0`jenkins-cli.jar`") in value
+
+
+@pytest.mark.asyncio
+async def test_hover_for_target_reference_ignores_following_conditional_block(
+    tmp_path: Path,
+) -> None:
+    text = """\
+release: dep
+\t@echo $@
+
+ifeq ($(X),1)
+Y := 1
+endif
+
+publish: release
+\t@echo ok
+
+dep:
+\t@echo dep
+"""
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 7, 10)
+
+    assert hover is not None
+    value = hover_value(hover)
+    assert value.startswith("```make\nrelease: dep\n\t@echo $@\n```")
+    assert "\n\n---\n\nDependency Tree:\n\n`release`  \n└─\u00a0`dep`" in value
+    assert "ifeq ($(X),1)" not in value
+    assert "Y := 1" not in value
+
+
+@pytest.mark.asyncio
+async def test_hover_for_target_definition_includes_full_multiline_make_rule(
+    tmp_path: Path,
+) -> None:
+    text = """\
+lint_jenkins: jenkins-cli.jar
+\t$(MRUN) +swdev +oracle/openjdk/17.0.4.1 \\
+\t\tetc_dev/jenkins_lint \\
+\t\t--cli $(PWD)/$^ \\
+\t\t--user $(JENKINS_USER)
+"""
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 0, 1)
+
+    assert hover is not None
+    value = hover_value(hover)
+    assert value.startswith(
+        "```make\n"
+        "lint_jenkins: jenkins-cli.jar\n"
+        "\t$(MRUN) +swdev +oracle/openjdk/17.0.4.1 \\\n"
+        "\t\tetc_dev/jenkins_lint \\\n"
+        "\t\t--cli $(PWD)/$^ \\\n"
+        "\t\t--user $(JENKINS_USER)\n"
+        "```"
+    )
+    assert ("\n\n---\n\nDependency Tree:\n\n`lint_jenkins`  \n└─\u00a0`jenkins-cli.jar`") in value
+    assert "Recipe:\n```sh\n" not in value
 
 
 @pytest.mark.asyncio
@@ -99,7 +629,55 @@ async def test_hover_for_variable_reference(tmp_path: Path) -> None:
     assert hover is not None
     value = hover_value(hover)
     assert value.startswith("```make\nFOO := hello\n```")
-    assert "Value: `hello`" in value
+    assert "Value:" not in value
+
+
+@pytest.mark.asyncio
+async def test_hover_for_multiline_variable_reference_does_not_duplicate_value(
+    tmp_path: Path,
+) -> None:
+    text = """\
+DECORATE = \\
+    first \\
+    second
+all:
+\t@echo $(DECORATE)
+"""
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 4, 11)
+
+    assert hover is not None
+    value = hover_value(hover)
+    assert value.startswith("```make\nDECORATE = \\")
+    assert "first \\\n    second" in value
+    assert "Value:" not in value
+
+
+@pytest.mark.asyncio
+async def test_hover_for_variable_reference_includes_leading_comments(
+    tmp_path: Path,
+) -> None:
+    text = """\
+# Path to the local virtualenv.
+# Used by lint and test targets.
+VENV := .venv
+all:
+\t@echo $(VENV)
+"""
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 4, 9)
+
+    assert hover is not None
+    value = hover_value(hover)
+    assert value.startswith("```make\nVENV := .venv\n```")
+    assert "Path to the local virtualenv.\nUsed by lint and test targets." in value
+    assert "Value:" not in value
 
 
 @pytest.mark.asyncio

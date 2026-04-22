@@ -34,7 +34,8 @@ class TargetDefinition:
     name_span: Span
     rule_span: Span
     prerequisites: tuple[str, ...]
-    recipe_preview: str | None
+    rule_text: str
+    recipe_text: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +45,7 @@ class VariableDefinition:
     assignment_span: Span
     operator: str
     value: str
+    documentation: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +70,7 @@ class AnalyzedDocument:
     version: int | None
     targets: dict[str, tuple[TargetDefinition, ...]]
     variables: dict[str, tuple[VariableDefinition, ...]]
+    phony_targets: frozenset[str]
     occurrences: tuple[SymbolOccurrence, ...]
     diagnostics: tuple[lsp.Diagnostic, ...]
 
