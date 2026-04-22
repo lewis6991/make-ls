@@ -26,6 +26,35 @@ def single_location(definition: lsp.Location | list[lsp.Location] | None) -> lsp
     raise AssertionError("expected a single definition location")
 
 
+def apply_text_edits(text: str, edits: list[lsp.TextEdit]) -> str:
+    line_offsets: list[int] = []
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        line_offsets.append(offset)
+        offset += len(line)
+    if not text.endswith("\n"):
+        line_offsets.append(offset)
+
+    def position_offset(position: lsp.Position) -> int:
+        return line_offsets[position.line] + position.character
+
+    updated = text
+    for edit in sorted(
+        edits,
+        key=lambda item: (
+            item.range.start.line,
+            item.range.start.character,
+            item.range.end.line,
+            item.range.end.character,
+        ),
+        reverse=True,
+    ):
+        start_offset = position_offset(edit.range.start)
+        end_offset = position_offset(edit.range.end)
+        updated = updated[:start_offset] + edit.new_text + updated[end_offset:]
+    return updated
+
+
 @pytest.mark.asyncio
 async def test_reports_makefile_syntax_diagnostics(tmp_path: Path) -> None:
     async with LspSession(tmp_path) as session:
@@ -1038,3 +1067,55 @@ async def test_go_to_definition_for_variable_reference(tmp_path: Path) -> None:
     location = single_location(definition)
     assert location.range.start.line == 0
     assert location.range.start.character == 0
+
+
+@pytest.mark.asyncio
+async def test_prepare_rename_for_variable_reference_uses_inner_variable_range(
+    tmp_path: Path,
+) -> None:
+    text = "FOO := hello\nall:\n\t@echo $(FOO)\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        result = await session.prepare_rename(uri, 2, 9)
+
+    assert isinstance(result, lsp.PrepareRenamePlaceholder)
+    assert result.placeholder == "FOO"
+    assert result.range.start.line == 2
+    assert result.range.start.character == 9
+    assert result.range.end.character == 12
+
+
+@pytest.mark.asyncio
+async def test_rename_variable_updates_definition_and_references(tmp_path: Path) -> None:
+    text = "FOO := hello\nBAR = $(FOO)\nall:\n\t@echo $(FOO)\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        workspace_edit = await session.rename(uri, 1, 8, "GREETING")
+
+    assert workspace_edit is not None
+    assert workspace_edit.changes is not None
+    edits = list(workspace_edit.changes[uri])
+    updated = apply_text_edits(text, edits)
+    assert updated == "GREETING := hello\nBAR = $(GREETING)\nall:\n\t@echo $(GREETING)\n"
+
+
+@pytest.mark.asyncio
+async def test_rename_variable_skips_builtin_references_before_local_shadow(
+    tmp_path: Path,
+) -> None:
+    text = "all:\n\t@echo $(MAKE)\nMAKE := wrapper\nlater:\n\t@echo $(MAKE)\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        workspace_edit = await session.rename(uri, 2, 1, "TOOL")
+
+    assert workspace_edit is not None
+    assert workspace_edit.changes is not None
+    edits = list(workspace_edit.changes[uri])
+    updated = apply_text_edits(text, edits)
+    assert updated == "all:\n\t@echo $(MAKE)\nTOOL := wrapper\nlater:\n\t@echo $(TOOL)\n"

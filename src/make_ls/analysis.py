@@ -45,6 +45,7 @@ MAKE_AUTOMATIC_VARIABLE_RE = re.compile(
 VARIABLE_REFERENCE_DELIMITERS = {"(": ")", "{": "}"}
 RECIPE_BODY_DIRECTIVES = frozenset({"else", "endif", "ifdef", "ifeq", "ifndef", "ifneq"})
 RULE_DIRECTIVES = frozenset(DIRECTIVE_DOCS)
+VARIABLE_NAME_RE = re.compile(r"^[A-Za-z0-9_.%/@+-]+$")
 
 
 def analyze_document(uri: str, version: int | None, source: str) -> AnalyzedDocument:
@@ -141,6 +142,69 @@ def definition_for_position(
     return lsp.Location(uri=document.uri, range=definition.name_span.to_lsp_range())
 
 
+def prepare_rename_for_position(
+    document: AnalyzedDocument,
+    position: lsp.Position,
+    source_lines: tuple[str, ...],
+) -> lsp.PrepareRenameResult | None:
+    occurrence = document.occurrence_at(position.line, position.character)
+    if occurrence is None or occurrence.kind != "variable":
+        return None
+    if not _is_renameable_variable_occurrence(document, occurrence):
+        return None
+
+    name_span = _variable_name_span_for_occurrence(occurrence, source_lines)
+    if name_span is None:
+        return None
+
+    return lsp.PrepareRenamePlaceholder(
+        range=name_span.to_lsp_range(),
+        placeholder=occurrence.name,
+    )
+
+
+def rename_variable_for_position(
+    document: AnalyzedDocument,
+    position: lsp.Position,
+    new_name: str,
+    source_lines: tuple[str, ...],
+) -> lsp.WorkspaceEdit | None:
+    occurrence = document.occurrence_at(position.line, position.character)
+    if occurrence is None or occurrence.kind != "variable":
+        return None
+    if not _is_renameable_variable_occurrence(document, occurrence):
+        return None
+    if VARIABLE_NAME_RE.fullmatch(new_name) is None:
+        return None
+
+    edits: list[lsp.TextEdit] = []
+    edited_spans: set[Span] = set()
+    for definition in document.variables.get(occurrence.name, ()):
+        if definition.name_span in edited_spans:
+            continue
+        edits.append(lsp.TextEdit(range=definition.name_span.to_lsp_range(), new_text=new_name))
+        edited_spans.add(definition.name_span)
+
+    for reference in document.occurrences:
+        if reference.kind != "variable" or reference.role != "reference":
+            continue
+        if reference.name != occurrence.name:
+            continue
+        if not _is_renameable_variable_occurrence(document, reference):
+            continue
+
+        name_span = _variable_name_span_for_occurrence(reference, source_lines)
+        if name_span is None or name_span in edited_spans:
+            continue
+        edits.append(lsp.TextEdit(range=name_span.to_lsp_range(), new_text=new_name))
+        edited_spans.add(name_span)
+
+    if not edits:
+        return None
+
+    return lsp.WorkspaceEdit(changes={document.uri: edits})
+
+
 def hover_for_position(
     document: AnalyzedDocument,
     position: lsp.Position,
@@ -204,6 +268,59 @@ def hover_for_position(
         ),
         range=occurrence.span.to_lsp_range(),
     )
+
+
+def _is_renameable_variable_occurrence(
+    document: AnalyzedDocument,
+    occurrence: SymbolOccurrence,
+) -> bool:
+    if occurrence.kind != "variable":
+        return False
+    if occurrence.role == "definition":
+        return occurrence.name in document.variables
+
+    # Rename should only touch references that resolve to a local variable
+    # definition, so builtin names like `$(MAKE)` and unresolved refs stay put.
+    return (
+        _strict_variable_definition_at_position(
+            document,
+            occurrence.name,
+            occurrence.span.start_line,
+            occurrence.span.start_character,
+        )
+        is not None
+    )
+
+
+def _variable_name_span_for_occurrence(
+    occurrence: SymbolOccurrence,
+    source_lines: tuple[str, ...],
+) -> Span | None:
+    if occurrence.kind != "variable":
+        return None
+    if occurrence.role == "definition":
+        return occurrence.span
+    if occurrence.span.start_line >= len(source_lines):
+        return None
+
+    line_text = source_lines[occurrence.span.start_line]
+    occurrence_text = line_text[occurrence.span.start_character : occurrence.span.end_character]
+    if (
+        occurrence_text.startswith("$(")
+        and occurrence_text.endswith(")")
+        and len(occurrence_text) >= 3
+    ) or (
+        occurrence_text.startswith("${")
+        and occurrence_text.endswith("}")
+        and len(occurrence_text) >= 3
+    ):
+        return Span(
+            occurrence.span.start_line,
+            occurrence.span.start_character + 2,
+            occurrence.span.end_line,
+            occurrence.span.end_character - 1,
+        )
+    return None
 
 
 def _builtin_hover_for_position(
@@ -333,6 +450,18 @@ def resolve_variable_definition(
     if not definitions:
         return None
 
+    best_match = _latest_variable_definition_before_position(definitions, line, character)
+
+    # Make variable expansion rules are context-sensitive. For navigation, the least
+    # surprising fallback is the closest earlier definition when one exists.
+    return best_match if best_match is not None else definitions[0]
+
+
+def _latest_variable_definition_before_position(
+    definitions: tuple[VariableDefinition, ...],
+    line: int,
+    character: int,
+) -> VariableDefinition | None:
     best_match: VariableDefinition | None = None
     for definition in definitions:
         if (definition.name_span.start_line, definition.name_span.start_character) <= (
@@ -340,10 +469,19 @@ def resolve_variable_definition(
             character,
         ):
             best_match = definition
+    return best_match
 
-    # Make variable expansion rules are context-sensitive. For navigation, the least
-    # surprising fallback is the closest earlier definition when one exists.
-    return best_match if best_match is not None else definitions[0]
+
+def _strict_variable_definition_at_position(
+    document: AnalyzedDocument,
+    name: str,
+    line: int,
+    character: int,
+) -> VariableDefinition | None:
+    definitions = document.variables.get(name)
+    if not definitions:
+        return None
+    return _latest_variable_definition_before_position(definitions, line, character)
 
 
 def _definition_target_definitions(

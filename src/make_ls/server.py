@@ -8,7 +8,13 @@ from pygls.lsp.server import LanguageServer
 from pygls.uris import to_fs_path
 
 from . import __version__
-from .analysis import analyze_document, definition_for_position, hover_for_position
+from .analysis import (
+    analyze_document,
+    definition_for_position,
+    hover_for_position,
+    prepare_rename_for_position,
+    rename_variable_for_position,
+)
 from .types import AnalyzedDocument
 
 MAKEFILE_PATTERNS = ("Makefile", "makefile", "GNUmakefile", "*.mk")
@@ -159,6 +165,31 @@ def create_server() -> MakeLsLanguageServer:
         return definition_for_position(documents[0], params.position, documents[1:])
 
     _ = server.feature(lsp.TEXT_DOCUMENT_DEFINITION)(definition)
+
+    def prepare_rename(
+        ls: MakeLsLanguageServer, params: lsp.PrepareRenameParams
+    ) -> lsp.PrepareRenameResult | None:
+        document = ls.analyze_uri(params.text_document.uri)
+        text_document = ls.workspace.get_text_document(params.text_document.uri)
+        return prepare_rename_for_position(
+            document,
+            params.position,
+            tuple(text_document.source.splitlines()),
+        )
+
+    _ = server.feature(lsp.TEXT_DOCUMENT_PREPARE_RENAME)(prepare_rename)
+
+    def rename(ls: MakeLsLanguageServer, params: lsp.RenameParams) -> lsp.WorkspaceEdit | None:
+        document = ls.analyze_uri(params.text_document.uri)
+        text_document = ls.workspace.get_text_document(params.text_document.uri)
+        return rename_variable_for_position(
+            document,
+            params.position,
+            params.new_name,
+            tuple(text_document.source.splitlines()),
+        )
+
+    _ = server.feature(lsp.TEXT_DOCUMENT_RENAME)(rename)
 
     return server
 

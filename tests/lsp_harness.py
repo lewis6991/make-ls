@@ -112,3 +112,24 @@ class LspSession:
         if result is None or isinstance(result, lsp.Location):
             return result
         return [location for location in result if isinstance(location, lsp.Location)]
+
+    async def prepare_rename(
+        self, uri: str, line: int, character: int
+    ) -> lsp.PrepareRenameResult | None:
+        return await self.client.text_document_prepare_rename_async(
+            lsp.PrepareRenameParams(
+                text_document=lsp.TextDocumentIdentifier(uri=uri),
+                position=lsp.Position(line=line, character=character),
+            )
+        )
+
+    async def rename(
+        self, uri: str, line: int, character: int, new_name: str
+    ) -> lsp.WorkspaceEdit | None:
+        return await self.client.text_document_rename_async(
+            lsp.RenameParams(
+                text_document=lsp.TextDocumentIdentifier(uri=uri),
+                position=lsp.Position(line=line, character=character),
+                new_name=new_name,
+            )
+        )
