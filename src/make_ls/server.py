@@ -147,14 +147,19 @@ def create_server() -> MakeLsLanguageServer:
     _ = server.feature(lsp.TEXT_DOCUMENT_DID_CLOSE)(did_close)
 
     def hover(ls: MakeLsLanguageServer, params: lsp.HoverParams) -> lsp.Hover | None:
-        documents = ls.workspace_documents(params.text_document.uri)
+        document = ls.analyze_uri(params.text_document.uri)
         text_document = ls.workspace.get_text_document(params.text_document.uri)
-        return hover_for_position(
-            documents[0],
+        source_lines = tuple(text_document.source.splitlines())
+        hover_result = hover_for_position(
+            document,
             params.position,
-            documents[1:],
-            tuple(text_document.source.splitlines()),
+            source_lines=source_lines,
         )
+        if hover_result is not None:
+            return hover_result
+
+        documents = ls.workspace_documents(params.text_document.uri)
+        return hover_for_position(document, params.position, documents[1:], source_lines)
 
     _ = server.feature(lsp.TEXT_DOCUMENT_HOVER)(hover)
 
