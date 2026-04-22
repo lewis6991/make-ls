@@ -7,42 +7,49 @@
 
 `make-ls` is a Makefile language server written in Python.
 
-It is still early, but it is already useful for real Makefiles. The server uses
-an owned line-based Make parser and checks recipe shell syntax with `bash -n`.
+It uses an owned Make parser and checks recipe shell syntax with `bash -n`.
 
-## What it does
+## Features
 
-- hover for targets and variables
+- hover, go-to-definition, and references for targets and variables
+- variable rename
 - hover for common GNU Make directives, functions, builtin variables, and special targets
-- go-to-definition for targets and variables
-- find references for targets and variables
-- rename for variables
 - diagnostics for Makefile syntax
 - diagnostics for shell syntax inside recipes
 - target lookup through explicit `include`, `-include`, and `sinclude` directives
 
-## What it does not do yet
+## Limits
 
-- full GNU Make evaluation
-- complete include-path expansion and evaluation
-- completion or code actions
+- no full GNU Make evaluation
+- include resolution is still limited
+- no completion or code actions yet
 
-## Run it
+## Install
+
+```sh
+uv tool install make-ls
+```
+
+## Run
+
+```sh
+make-ls
+```
+
+For local development:
 
 ```sh
 uv sync --all-groups
 uv run make-ls
 ```
 
-Any editor that can start a stdio LSP can use it.
-
 ## Neovim
 
 ```lua
-vim.lsp.config("make-ls", {
-  cmd = { "uv", "run", "--directory", "/path/to/make-ls", "make-ls" },
-  filetypes = { "make" },
-  root_markers = { "Makefile", "makefile", "GNUmakefile", ".git" },
+vim.lsp.config('make-ls', {
+  cmd = { 'make-ls' },
+  filetypes = { 'make' },
+  root_markers = { 'Makefile' },
 })
 
 vim.lsp.enable("make-ls")
@@ -55,10 +62,3 @@ make check
 make test
 make build
 ```
-
-## Release
-
-Stable releases from `.github/workflows/releases.yml` publish GitHub assets and
-upload the tagged distribution to PyPI with trusted publishing. Configure PyPI
-to trust `.github/workflows/releases.yml` and, if you keep it, the `pypi`
-environment.
