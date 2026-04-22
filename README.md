@@ -1,28 +1,50 @@
-makels is a Makefile language server written in Python.
+# makels
 
-Current feature slice:
+`makels` is a Makefile language server written in Python.
 
-- hover for targets and variables, with same-workspace fallback for targets
-- hover for common GNU Make directives, functions, builtin variables, and special targets from the official manual
-- go-to-definition for targets and variables, with same-workspace fallback for targets
-- Makefile syntax diagnostics
-- shell syntax diagnostics for recipe lines
+It is still early, but it is already useful for real Makefiles. The server uses
+an owned line-based Make parser and checks recipe shell syntax with `bash -n`.
 
-Implementation notes:
+## What it does
 
-- Make parsing is handled by an owned line-based parser in `src/makels/analysis.py`.
-- Shell recipe syntax is checked with `bash -n` after Make-specific normalization.
+- hover for targets and variables
+- hover for common GNU Make directives, functions, builtin variables, and special targets
+- go-to-definition for targets and variables
+- diagnostics for Makefile syntax
+- diagnostics for shell syntax inside recipes
+- same-workspace target lookup across `Makefile`, `makefile`, `GNUmakefile`, and `*.mk`
 
-Development:
+## What it does not do yet
 
-- `uv sync --all-groups`
-- `make check`
-- `make test`
-- `make build`
+- full GNU Make evaluation
+- include-aware workspace resolution
+- completion, rename, references, or code actions
 
-Release automation:
+## Run it
 
-- `.github/workflows/ci.yml` runs commit lint plus the local `make check` gate.
-- `.github/workflows/releases.yml` runs release-please for stable releases and updates a rolling nightly release on pushes to `main`.
-- `.github/workflows/release-assets.yml` builds and uploads wheel and sdist assets from the same local release entrypoints used by `make`.
-- Local release smoke path: `make release-dist RELEASE_CHANNEL=nightly RELEASE_RUN_NUMBER=42`
+```sh
+uv sync --all-groups
+uv run makels
+```
+
+Any editor that can start a stdio LSP can use it.
+
+## Neovim
+
+```lua
+vim.lsp.config("makels", {
+  cmd = { "uv", "run", "--directory", "/path/to/makels", "makels" },
+  filetypes = { "make" },
+  root_markers = { "Makefile", "makefile", "GNUmakefile", ".git" },
+})
+
+vim.lsp.enable("makels")
+```
+
+## Development
+
+```sh
+make check
+make test
+make build
+```
