@@ -1,0 +1,80 @@
+name: Releases
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Release automation to run.
+        required: true
+        type: choice
+        default: nightly
+        options:
+          - nightly
+          - stable
+          - both
+
+concurrency:
+  group: releases-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  release_please:
+    name: Release Please
+    if: >-
+      ${{
+        github.event_name != 'workflow_dispatch' ||
+        github.event.inputs.target == 'stable' ||
+        github.event.inputs.target == 'both'
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish_stable:
+    name: Publish stable assets
+    needs: release_please
+    if: ${{ needs.release_please.outputs.release_created == 'true' }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-assets.yml
+    with:
+      release_channel: stable
+      release_tag: ${{ needs.release_please.outputs.tag_name }}
+      checkout_ref: ${{ needs.release_please.outputs.tag_name }}
+      release_version: ${{ needs.release_please.outputs.version }}
+
+  publish_nightly:
+    name: Publish nightly assets
+    if: >-
+      ${{
+        github.event_name != 'workflow_dispatch' ||
+        github.event.inputs.target == 'nightly' ||
+        github.event.inputs.target == 'both'
+      }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-assets.yml
+    with:
+      release_channel: nightly
+      release_tag: nightly
+      checkout_ref: ${{ github.sha }}
+      create_release: true

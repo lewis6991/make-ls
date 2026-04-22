@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Makefile language server"
 readme = "README.md"
 authors = [
-    { name = "Lewis Russell", email = "lewis6991@gmail.com" }
+    { name = "Lewis Russell", email = "lewis6991@gmail.com" },
 ]
 requires-python = ">=3.12"
 dependencies = [
@@ -30,7 +30,7 @@ dev = [
 [tool.basedpyright]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
-include = ["src", "tests"]
+include = ["src", "tests", "scripts"]
 venvPath = "."
 venv = ".venv"
 reportAny = "error"
@@ -43,7 +43,7 @@ asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 100
-src = ["src", "tests"]
+src = ["src", "tests", "scripts"]
 target-version = "py312"
 
 [tool.ruff.format]

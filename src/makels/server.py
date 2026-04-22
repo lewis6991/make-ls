@@ -7,6 +7,7 @@ from lsprotocol import types as lsp
 from pygls.lsp.server import LanguageServer
 from pygls.uris import to_fs_path
 
+from . import __version__
 from .analysis import analyze_document, definition_for_position, hover_for_position
 from .types import AnalyzedDocument
 
@@ -17,7 +18,7 @@ def _server_version() -> str:
     try:
         return version("makels")
     except PackageNotFoundError:
-        return "0.1.0"
+        return __version__
 
 
 class MakelsLanguageServer(LanguageServer):

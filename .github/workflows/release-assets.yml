@@ -1,0 +1,118 @@
+name: Release Assets
+
+on:
+  workflow_call:
+    inputs:
+      release_channel:
+        description: Release channel for package versioning and GitHub release handling.
+        required: true
+        type: string
+      release_tag:
+        description: Git tag to publish assets against.
+        required: true
+        type: string
+      checkout_ref:
+        description: Git ref to build from.
+        required: true
+        type: string
+      release_version:
+        description: Explicit version to stamp before building artifacts.
+        required: false
+        default: ""
+        type: string
+      create_release:
+        description: Create or update the GitHub release before uploading assets.
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  build_assets:
+    name: Build assets
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      release_version: ${{ steps.version.outputs.value }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: python -m pip install uv
+
+      - name: Install project dependencies
+        run: uv sync --frozen --all-groups
+
+      - name: Compute release version
+        id: version
+        run: |
+          if [ -n "${{ inputs.release_version }}" ]; then
+            version="${{ inputs.release_version }}"
+          else
+            version="$(uv run python scripts/release_version.py compute --channel "${{ inputs.release_channel }}" --run-number "${{ github.run_number }}")"
+          fi
+
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Run verification gate
+        run: make check
+
+      - name: Stamp release version
+        run: make release-stamp RELEASE_VERSION="${{ steps.version.outputs.value }}"
+
+      - name: Build distribution artifacts
+        run: make build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist/*
+
+  publish:
+    name: Publish artifacts
+    needs: build_assets
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/release-assets
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          publish_args=(
+            --assets-dir "${{ runner.temp }}/release-assets"
+            --release-channel "${{ inputs.release_channel }}"
+            --release-tag "${{ inputs.release_tag }}"
+            --release-version "${{ needs.build_assets.outputs.release_version }}"
+          )
+
+          if [ "${{ inputs.create_release }}" = "true" ]; then
+            publish_args+=(--create-release)
+          fi
+
+          python scripts/publish_release.py "${publish_args[@]}"
