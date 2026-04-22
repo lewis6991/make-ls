@@ -16,14 +16,14 @@ MAKEFILE_PATTERNS = ("Makefile", "makefile", "GNUmakefile", "*.mk")
 
 def _server_version() -> str:
     try:
-        return version("makels")
+        return version("make-ls")
     except PackageNotFoundError:
         return __version__
 
 
-class MakelsLanguageServer(LanguageServer):
+class MakeLsLanguageServer(LanguageServer):
     def __init__(self) -> None:
-        super().__init__("makels", _server_version())  # pyright: ignore[reportUnknownMemberType]
+        super().__init__("make-ls", _server_version())  # pyright: ignore[reportUnknownMemberType]
         self._documents: dict[str, AnalyzedDocument] = {}
         self._disk_signatures: dict[str, tuple[int, int]] = {}
         self._workspace_file_cache: dict[Path, tuple[Path, ...]] = {}
@@ -117,22 +117,22 @@ class MakelsLanguageServer(LanguageServer):
         )
 
 
-def create_server() -> MakelsLanguageServer:
-    server = MakelsLanguageServer()
+def create_server() -> MakeLsLanguageServer:
+    server = MakeLsLanguageServer()
 
-    def did_open(ls: MakelsLanguageServer, params: lsp.DidOpenTextDocumentParams) -> None:
+    def did_open(ls: MakeLsLanguageServer, params: lsp.DidOpenTextDocumentParams) -> None:
         ls.invalidate_workspace_cache(params.text_document.uri)
         ls.publish_document_diagnostics(params.text_document.uri)
 
     _ = server.feature(lsp.TEXT_DOCUMENT_DID_OPEN)(did_open)
 
-    def did_change(ls: MakelsLanguageServer, params: lsp.DidChangeTextDocumentParams) -> None:
+    def did_change(ls: MakeLsLanguageServer, params: lsp.DidChangeTextDocumentParams) -> None:
         ls.invalidate_workspace_cache(params.text_document.uri)
         ls.publish_document_diagnostics(params.text_document.uri)
 
     _ = server.feature(lsp.TEXT_DOCUMENT_DID_CHANGE)(did_change)
 
-    def did_close(ls: MakelsLanguageServer, params: lsp.DidCloseTextDocumentParams) -> None:
+    def did_close(ls: MakeLsLanguageServer, params: lsp.DidCloseTextDocumentParams) -> None:
         ls.clear_uri(params.text_document.uri)
         ls.text_document_publish_diagnostics(
             lsp.PublishDiagnosticsParams(uri=params.text_document.uri, diagnostics=[])
@@ -140,7 +140,7 @@ def create_server() -> MakelsLanguageServer:
 
     _ = server.feature(lsp.TEXT_DOCUMENT_DID_CLOSE)(did_close)
 
-    def hover(ls: MakelsLanguageServer, params: lsp.HoverParams) -> lsp.Hover | None:
+    def hover(ls: MakeLsLanguageServer, params: lsp.HoverParams) -> lsp.Hover | None:
         documents = ls.workspace_documents(params.text_document.uri)
         text_document = ls.workspace.get_text_document(params.text_document.uri)
         return hover_for_position(
@@ -153,7 +153,7 @@ def create_server() -> MakelsLanguageServer:
     _ = server.feature(lsp.TEXT_DOCUMENT_HOVER)(hover)
 
     def definition(
-        ls: MakelsLanguageServer, params: lsp.DefinitionParams
+        ls: MakeLsLanguageServer, params: lsp.DefinitionParams
     ) -> lsp.Location | list[lsp.Location] | None:
         documents = ls.workspace_documents(params.text_document.uri)
         return definition_for_position(documents[0], params.position, documents[1:])

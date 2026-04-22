@@ -59,7 +59,7 @@ def create_or_update_release(
     _ = run(["git", "tag", "-f", release_tag, release_commit])
     _ = run(["git", "push", "origin", f"refs/tags/{release_tag}", "--force"])
 
-    release_args = ["--title", f"makels {release_version}"]
+    release_args = ["--title", f"make-ls {release_version}"]
     if prerelease:
         release_args.append("--prerelease")
 

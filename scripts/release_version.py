@@ -8,7 +8,7 @@ from typing import Literal, cast
 
 ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT_PATH = ROOT / "pyproject.toml"
-PACKAGE_INIT_PATH = ROOT / "src" / "makels" / "__init__.py"
+PACKAGE_INIT_PATH = ROOT / "src" / "make_ls" / "__init__.py"
 
 _PYPROJECT_VERSION_PATTERN = re.compile(r'(?m)^(version\s*=\s*)"[^"]+"$')
 _INIT_VERSION_PATTERN = re.compile(r'(?m)^__version__ = "[^"]+"$')

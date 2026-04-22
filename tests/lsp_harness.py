@@ -10,7 +10,7 @@ from pygls.lsp.client import LanguageClient
 from pygls.protocol import JsonRPCProtocol
 from pygls.protocol.json_rpc import RPCMessage
 
-from makels.server import MakelsLanguageServer, create_server
+from make_ls.server import MakeLsLanguageServer, create_server
 
 
 class InMemoryWriter:
@@ -30,8 +30,8 @@ class InMemoryWriter:
 class LspSession:
     def __init__(self, root: Path) -> None:
         self.root = root
-        self.server: MakelsLanguageServer = create_server()
-        self.client = LanguageClient("makels-tests", "0.1.0")
+        self.server: MakeLsLanguageServer = create_server()
+        self.client = LanguageClient("make-ls-tests", "0.1.0")
         self.diagnostics: asyncio.Queue[lsp.PublishDiagnosticsParams] = asyncio.Queue()
 
         def capture_diagnostics(

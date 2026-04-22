@@ -1,4 +1,4 @@
-# MakeLS Plan
+# make-ls plan
 
 Build a small, typed Makefile language server in Python.
 

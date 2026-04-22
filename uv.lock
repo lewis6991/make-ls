@@ -68,7 +68,7 @@ wheels = [
 ]
 
 [[package]]
-name = "makels"
+name = "make-ls"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

@@ -1,5 +1,5 @@
 [project]
-name = "makels"
+name = "make-ls"
 version = "0.1.0"
 description = "Makefile language server"
 readme = "README.md"
@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-makels = "makels.__main__:main"
+make-ls = "make_ls.__main__:main"
 
 [build-system]
 requires = ["uv_build>=0.11.7,<0.12.0"]

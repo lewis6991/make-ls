@@ -1,6 +1,6 @@
-# makels
+# make-ls
 
-`makels` is a Makefile language server written in Python.
+`make-ls` is a Makefile language server written in Python.
 
 It is still early, but it is already useful for real Makefiles. The server uses
 an owned line-based Make parser and checks recipe shell syntax with `bash -n`.
@@ -24,7 +24,7 @@ an owned line-based Make parser and checks recipe shell syntax with `bash -n`.
 
 ```sh
 uv sync --all-groups
-uv run makels
+uv run make-ls
 ```
 
 Any editor that can start a stdio LSP can use it.
@@ -32,13 +32,13 @@ Any editor that can start a stdio LSP can use it.
 ## Neovim
 
 ```lua
-vim.lsp.config("makels", {
-  cmd = { "uv", "run", "--directory", "/path/to/makels", "makels" },
+vim.lsp.config("make-ls", {
+  cmd = { "uv", "run", "--directory", "/path/to/make-ls", "make-ls" },
   filetypes = { "make" },
   root_markers = { "Makefile", "makefile", "GNUmakefile", ".git" },
 })
 
-vim.lsp.enable("makels")
+vim.lsp.enable("make-ls")
 ```
 
 ## Development
@@ -48,3 +48,10 @@ make check
 make test
 make build
 ```
+
+## Release
+
+Stable releases from `.github/workflows/releases.yml` publish GitHub assets and
+upload the tagged distribution to PyPI with trusted publishing. Configure PyPI
+to trust `.github/workflows/releases.yml` and, if you keep it, the `pypi`
+environment.

@@ -7,7 +7,7 @@
       "extra-files": [
         {
           "type": "generic",
-          "path": "src/makels/__init__.py"
+          "path": "src/make_ls/__init__.py"
         }
       ]
     }

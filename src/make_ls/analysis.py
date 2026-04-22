@@ -480,7 +480,7 @@ def _collect_shell_diagnostics(recipe_lines: list[RecipeLine]) -> list[lsp.Diagn
                 ).to_lsp_range(),
                 message=_diagnostic_message("Invalid shell syntax in recipe", command_text),
                 severity=lsp.DiagnosticSeverity.Error,
-                source="makels",
+                source="make-ls",
             )
         )
 
@@ -558,7 +558,7 @@ def _collect_unknown_variable_diagnostics(
                     occurrence_text,
                 ),
                 severity=lsp.DiagnosticSeverity.Warning,
-                source="makels",
+                source="make-ls",
             )
         )
     return diagnostics
@@ -582,7 +582,7 @@ def _make_syntax_diagnostic(
             ),
         ),
         severity=lsp.DiagnosticSeverity.Error,
-        source="makels",
+        source="make-ls",
     )
 
 
@@ -1391,7 +1391,7 @@ def _recover_assignment_value_diagnostics(
                 value[reference_start:],
             ),
             severity=lsp.DiagnosticSeverity.Error,
-            source="makels",
+            source="make-ls",
         )
     ]
 
