@@ -64,14 +64,15 @@ Read `PLAN.md` first, then update this file.
 - Recovered target hover/definition when Tree-sitter loses later rule nodes behind GNU Make parser desync
 - Added a shell-syntax fallback check for multiline recipes when Tree-sitter Bash rejects valid continued blocks
 - Replaced Tree-sitter with an owned line-based Make parser and `bash -n` shell diagnostics
+- Added same-workspace target hover and go-to-definition fallback across related Makefiles with local-first and ambiguity-aware behavior
 
 ## In Progress
 
-- Add same-workspace multi-file symbol resolution, starting with simple target lookup across related Makefiles
+- Expand workspace resolution beyond opportunistic target fallback, starting with include-aware related-file discovery
 
 ## Next Steps
 
-1. Add same-workspace multi-file symbol resolution, starting with simple target lookup across related Makefiles
+1. Expand workspace resolution with include-aware related-file discovery and broader multi-file target lookup
 2. Expand Makefile semantic coverage for includes, pattern rules, and more prerequisite shapes
 3. Tighten shell diagnostics around multiline recipes and command-prefix edge cases
 4. Add change-notification coverage to the end-to-end suite
@@ -98,6 +99,26 @@ Sessions should keep this file current using the structure below.
 
 ## Session Log
 
+
+### Session Update
+
+- Date: 2026-04-22
+- Summary: Implemented same-workspace target resolution for hover and go-to-definition with lazy workspace indexing and conservative ambiguity handling.
+- Files changed: `README.md`, `STATUS.md`, `src/makels/analysis.py`, `src/makels/server.py`, `tests/test_e2e.py`
+- Commands run: `sed -n '1,220p' PLAN.md`, `sed -n '1,130p' STATUS.md`, `rg -n "def definition_for_position|def hover_for_position|def analyze_document|class MakelsLanguageServer|def create_server|occurrence_at|phony_targets" src/makels -n`, `sed -n '1,240p' src/makels/types.py`, `sed -n '1,260p' src/makels/server.py`, `sed -n '1,260p' src/makels/analysis.py`, `sed -n '260,520p' src/makels/analysis.py`, `sed -n '1,260p' tests/lsp_harness.py`, `sed -n '1,260p' tests/test_e2e.py`, `sed -n '520,860p' tests/test_e2e.py`, `uv run pytest tests/test_e2e.py -k 'falls_back_to_sibling or ambiguous_workspace_target or prefers_local_target_over_workspace_fallback'`, `uv run basedpyright src/makels/server.py src/makels/analysis.py tests/test_e2e.py`, `uv run ruff format .`, `uv run ruff check .`, `uv run basedpyright`, `uv run pytest`
+- Results: The server now scans related Makefile-like files under the active workspace root, analyzes unopened files lazily from disk, and falls back to cross-file target lookup only when the current document has no local target definition. Go-to-definition returns all matching workspace target locations on ambiguity, while hover refuses ambiguous cross-file matches and stays local-first. Added end-to-end coverage for unopened sibling Makefiles, ambiguous workspace targets, and local-over-workspace precedence. Full local verification passed: `ruff format`, `ruff check`, `basedpyright`, and `pytest` (`37` tests).
+- Next step: Expand the workspace pass beyond opportunistic target lookup, starting with include-aware related-file discovery.
+- Blockers: None
+
+### Session Update
+
+- Date: 2026-04-22
+- Summary: Claimed the workspace-resolution slice to extend hover and go-to-definition beyond the current same-document model.
+- Files changed: `STATUS.md`
+- Commands run: `sed -n '1,220p' PLAN.md`, `sed -n '1,130p' STATUS.md`, `rg -n "def definition_for_position|def hover_for_position|def analyze_document|class MakelsLanguageServer|def create_server|occurrence_at|phony_targets" src/makels -n`, `sed -n '1,240p' src/makels/types.py`, `sed -n '1,260p' src/makels/server.py`
+- Results: Confirmed the parser front end is in good shape and that the current limitation is semantic lookup scope: hover and definition are both driven by a single `AnalyzedDocument`, so the next narrow step is a workspace document index with opportunistic cross-file symbol lookup.
+- Next step: Implement a minimal same-workspace index for related Makefiles and use it from hover and go-to-definition.
+- Blockers: None
 
 ### Session Update
 

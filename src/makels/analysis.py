@@ -116,20 +116,22 @@ def analyze_document(uri: str, version: int | None, source: str) -> AnalyzedDocu
 
 
 def definition_for_position(
-    document: AnalyzedDocument, position: lsp.Position
+    document: AnalyzedDocument,
+    position: lsp.Position,
+    related_documents: tuple[AnalyzedDocument, ...] = (),
 ) -> lsp.Location | list[lsp.Location] | None:
     occurrence = document.occurrence_at(position.line, position.character)
     if occurrence is None:
         return None
 
     if occurrence.kind == "target":
-        definitions = document.targets.get(occurrence.name)
+        definitions = _definition_target_definitions(document, related_documents, occurrence.name)
         if not definitions:
             return None
 
         locations = [
-            lsp.Location(uri=document.uri, range=definition.name_span.to_lsp_range())
-            for definition in definitions
+            lsp.Location(uri=source_document.uri, range=definition.name_span.to_lsp_range())
+            for source_document, definition in definitions
         ]
         if len(locations) == 1:
             return locations[0]
@@ -147,35 +149,41 @@ def definition_for_position(
     return lsp.Location(uri=document.uri, range=definition.name_span.to_lsp_range())
 
 
-def hover_for_position(document: AnalyzedDocument, position: lsp.Position) -> lsp.Hover | None:
+def hover_for_position(
+    document: AnalyzedDocument,
+    position: lsp.Position,
+    related_documents: tuple[AnalyzedDocument, ...] = (),
+) -> lsp.Hover | None:
     occurrence = document.occurrence_at(position.line, position.character)
     if occurrence is None:
         return None
 
     if occurrence.kind == "target":
-        definitions = document.targets.get(occurrence.name)
+        definitions = _hover_target_definitions(document, related_documents, occurrence.name)
         if not definitions:
             return None
 
-        definition = definitions[0]
+        definition_document, definition = definitions[0]
         # Repeated Make rules can split prerequisites and recipes across separate
         # definitions. Keep definition hovers tied to the concrete rule under the
         # cursor, but prefer a recipe-bearing rule for plain references.
-        if occurrence.role == "definition":
-            for candidate in definitions:
+        if occurrence.role == "definition" and definition_document.uri == document.uri:
+            for candidate_document, candidate in definitions:
                 if candidate.name_span == occurrence.span:
+                    definition_document = candidate_document
                     definition = candidate
                     break
         else:
-            for candidate in definitions:
+            for candidate_document, candidate in definitions:
                 if candidate.recipe_text is not None:
+                    definition_document = candidate_document
                     definition = candidate
                     break
 
         return lsp.Hover(
             contents=lsp.MarkupContent(
                 kind=lsp.MarkupKind.Markdown,
-                value=_render_target_hover(document, definition, len(definitions)),
+                value=_render_target_hover(definition_document, definition, len(definitions)),
             ),
             range=occurrence.span.to_lsp_range(),
         )
@@ -216,6 +224,48 @@ def resolve_variable_definition(
     # Make variable expansion rules are context-sensitive. For navigation, the least
     # surprising fallback is the closest earlier definition when one exists.
     return best_match if best_match is not None else definitions[0]
+
+
+def _definition_target_definitions(
+    document: AnalyzedDocument,
+    related_documents: tuple[AnalyzedDocument, ...],
+    name: str,
+) -> tuple[tuple[AnalyzedDocument, TargetDefinition], ...]:
+    local_definitions = document.targets.get(name)
+    if local_definitions:
+        return tuple((document, definition) for definition in local_definitions)
+
+    definitions: list[tuple[AnalyzedDocument, TargetDefinition]] = []
+    for related_document in related_documents:
+        related_definitions = related_document.targets.get(name)
+        if not related_definitions:
+            continue
+        definitions.extend((related_document, definition) for definition in related_definitions)
+
+    return tuple(definitions)
+
+
+def _hover_target_definitions(
+    document: AnalyzedDocument,
+    related_documents: tuple[AnalyzedDocument, ...],
+    name: str,
+) -> tuple[tuple[AnalyzedDocument, TargetDefinition], ...]:
+    local_definitions = document.targets.get(name)
+    if local_definitions:
+        return tuple((document, definition) for definition in local_definitions)
+
+    matching_documents: list[tuple[AnalyzedDocument, tuple[TargetDefinition, ...]]] = []
+    for related_document in related_documents:
+        related_definitions = related_document.targets.get(name)
+        if not related_definitions:
+            continue
+        matching_documents.append((related_document, related_definitions))
+
+    if len(matching_documents) != 1:
+        return ()
+
+    related_document, related_definitions = matching_documents[0]
+    return tuple((related_document, definition) for definition in related_definitions)
 
 
 def _with_variable_comments(

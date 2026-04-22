@@ -2,8 +2,8 @@ makels is a Makefile language server written in Python.
 
 Current feature slice:
 
-- hover for targets and variables
-- go-to-definition for targets and variables
+- hover for targets and variables, with same-workspace fallback for targets
+- go-to-definition for targets and variables, with same-workspace fallback for targets
 - Makefile syntax diagnostics
 - shell syntax diagnostics for recipe lines
 

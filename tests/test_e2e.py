@@ -554,6 +554,39 @@ lint_jenkins: jenkins-cli.jar
 
 
 @pytest.mark.asyncio
+async def test_hover_for_target_reference_falls_back_to_sibling_makefile(tmp_path: Path) -> None:
+    _ = (tmp_path / "rules.mk").write_text(
+        "dep: tool\n\t@echo dep\n\ntool:\n\t@echo tool\n",
+        encoding="utf-8",
+    )
+    text = "all: dep\n\t@echo done\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 0, 6)
+
+    assert hover is not None
+    value = hover_value(hover)
+    assert value.startswith("```make\ndep: tool\n\t@echo dep\n```")
+    assert "Dependency Tree:\n\n`dep`  \n└─\u00a0`tool`" in value
+
+
+@pytest.mark.asyncio
+async def test_hover_for_ambiguous_workspace_target_returns_none(tmp_path: Path) -> None:
+    _ = (tmp_path / "a.mk").write_text("dep:\n\t@echo a\n", encoding="utf-8")
+    _ = (tmp_path / "b.mk").write_text("dep:\n\t@echo b\n", encoding="utf-8")
+    text = "all: dep\n\t@echo done\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 0, 6)
+
+    assert hover is None
+
+
+@pytest.mark.asyncio
 async def test_hover_for_target_reference_ignores_following_conditional_block(
     tmp_path: Path,
 ) -> None:
@@ -690,6 +723,65 @@ async def test_go_to_definition_for_prerequisite(tmp_path: Path) -> None:
         definition = await session.definition(uri, 0, 6)
 
     location = single_location(definition)
+    assert location.range.start.line == 3
+    assert location.range.start.character == 0
+
+
+@pytest.mark.asyncio
+async def test_go_to_definition_for_prerequisite_falls_back_to_sibling_makefile(
+    tmp_path: Path,
+) -> None:
+    remote_path = tmp_path / "rules.mk"
+    _ = remote_path.write_text("dep:\n\t@echo dep\n", encoding="utf-8")
+    text = "all: dep\n\t@echo done\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        definition = await session.definition(uri, 0, 6)
+
+    location = single_location(definition)
+    assert location.uri == remote_path.as_uri()
+    assert location.range.start.line == 0
+    assert location.range.start.character == 0
+
+
+@pytest.mark.asyncio
+async def test_go_to_definition_for_ambiguous_workspace_target_returns_all_locations(
+    tmp_path: Path,
+) -> None:
+    first_path = tmp_path / "a.mk"
+    second_path = tmp_path / "b.mk"
+    _ = first_path.write_text("dep:\n\t@echo a\n", encoding="utf-8")
+    _ = second_path.write_text("dep:\n\t@echo b\n", encoding="utf-8")
+    text = "all: dep\n\t@echo done\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        definition = await session.definition(uri, 0, 6)
+
+    assert isinstance(definition, list)
+    assert {(location.uri, location.range.start.line) for location in definition} == {
+        (first_path.as_uri(), 0),
+        (second_path.as_uri(), 0),
+    }
+
+
+@pytest.mark.asyncio
+async def test_go_to_definition_prefers_local_target_over_workspace_fallback(
+    tmp_path: Path,
+) -> None:
+    _ = (tmp_path / "rules.mk").write_text("dep:\n\t@echo remote\n", encoding="utf-8")
+    text = "all: dep\n\t@echo done\n\ndep:\n\t@echo local\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        definition = await session.definition(uri, 0, 6)
+
+    location = single_location(definition)
+    assert location.uri == uri
     assert location.range.start.line == 3
     assert location.range.start.character == 0
 
