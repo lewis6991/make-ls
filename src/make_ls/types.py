@@ -5,8 +5,18 @@ from typing import Literal
 
 from lsprotocol import types as lsp
 
+FormKind = Literal["assignment", "conditional", "rule"]
 SymbolKind = Literal["target", "variable"]
 SymbolRole = Literal["definition", "reference"]
+SymbolContextKind = Literal[
+    "assignment_definition",
+    "assignment_value",
+    "conditional_test",
+    "prerequisite",
+    "recipe",
+    "target_definition",
+]
+VariableGuardKind = Literal["defined", "empty", "nonempty", "undefined"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,11 +59,31 @@ class VariableDefinition:
 
 
 @dataclass(frozen=True, slots=True)
+class VariableGuard:
+    name: str
+    kind: VariableGuardKind
+
+
+@dataclass(frozen=True, slots=True)
+class SymbolContext:
+    form_kind: FormKind
+    kind: SymbolContextKind
+    active_guards: tuple[VariableGuard, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentForm:
+    kind: FormKind
+    span: Span
+
+
+@dataclass(frozen=True, slots=True)
 class SymbolOccurrence:
     kind: SymbolKind
     role: SymbolRole
     name: str
     span: Span
+    context: SymbolContext | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +103,7 @@ class AnalyzedDocument:
     includes: tuple[str, ...]
     phony_targets: frozenset[str]
     occurrences: tuple[SymbolOccurrence, ...]
+    forms: tuple[DocumentForm, ...]
     diagnostics: tuple[lsp.Diagnostic, ...]
 
     def occurrence_at(self, line: int, character: int) -> SymbolOccurrence | None:

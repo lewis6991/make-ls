@@ -104,7 +104,7 @@ all: $(VENV)
         hover = await session.hover(uri, 3, 8)
         definition = await session.definition(uri, 3, 8)
 
-    assert diagnostics == []
+    assert all(diagnostic.severity != lsp.DiagnosticSeverity.Error for diagnostic in diagnostics)
     assert hover is not None
     assert "VENV := .venv" in hover_value(hover)
     location = single_location(definition)
@@ -156,14 +156,117 @@ async def test_warns_for_unknown_variable_reference(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_does_not_warn_for_env_style_variable_reference(tmp_path: Path) -> None:
-    text = "all:\n\t@echo $(HOME)\n"
+async def test_does_not_warn_for_environment_variable_reference(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MAKE_LS_TEST_ENV_VAR", "1")
+    text = "all:\n\t@echo $(MAKE_LS_TEST_ENV_VAR)\n"
 
     async with LspSession(tmp_path) as session:
         uri = await session.open_document("Makefile", text)
         diagnostics = await session.wait_for_diagnostics(uri)
 
     assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_warns_for_unknown_uppercase_variable_reference(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OUTPUT_DECORATOR", raising=False)
+    text = "all:\n\t@echo $(OUTPUT_DECORATOR)\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].severity == lsp.DiagnosticSeverity.Warning
+    assert diagnostics[0].message.startswith("Unknown variable reference")
+
+
+@pytest.mark.asyncio
+async def test_does_not_warn_for_unknown_variable_reference_in_nonempty_guarded_branch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FEATURE", raising=False)
+    text = "ifneq ($(FEATURE),)\nall:\n\t@echo $(FEATURE)\nendif\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_does_not_warn_for_unknown_variable_reference_in_nonempty_else_branch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FEATURE", raising=False)
+    text = "ifeq ($(FEATURE),)\nelse\nall:\n\t@echo $(FEATURE)\nendif\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_warns_for_unknown_variable_reference_in_empty_guarded_branch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FEATURE", raising=False)
+    text = "ifeq ($(FEATURE),)\nall:\n\t@echo $(FEATURE)\nendif\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].range.start.line == 2
+    assert diagnostics[0].severity == lsp.DiagnosticSeverity.Warning
+    assert diagnostics[0].message.startswith("Unknown variable reference")
+
+
+@pytest.mark.asyncio
+async def test_warns_for_unknown_variable_reference_in_guarded_assignment_value(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FEATURE", raising=False)
+    text = "ifneq ($(FEATURE),)\nRESULT = $(FEATURE)\nendif\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_warns_for_unknown_variable_reference_when_guard_variable_differs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FEATURE", raising=False)
+    monkeypatch.delenv("OTHER", raising=False)
+    text = "ifneq ($(OTHER),)\nRESULT = $(FEATURE)\nendif\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].range.start.line == 1
+    assert diagnostics[0].severity == lsp.DiagnosticSeverity.Warning
+    assert diagnostics[0].message.startswith("Unknown variable reference")
 
 
 @pytest.mark.asyncio
@@ -217,6 +320,51 @@ async def test_reports_multiline_shell_syntax_diagnostics(tmp_path: Path) -> Non
     assert len(diagnostics) == 1
     assert diagnostics[0].range.start.line == 1
     assert diagnostics[0].message.startswith("Invalid shell syntax in recipe")
+
+
+@pytest.mark.asyncio
+async def test_did_change_still_republishes_non_shell_diagnostics(tmp_path: Path) -> None:
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", "FOO := ok\nall:\n\t@echo $(FOO)\n")
+        diagnostics = await session.wait_for_diagnostics(uri)
+        assert diagnostics == []
+
+        await session.change_document(uri, "FOO := ok\nall:\n\t@echo $(BAR)\n")
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].range.start.line == 2
+    assert diagnostics[0].severity == lsp.DiagnosticSeverity.Warning
+    assert diagnostics[0].message.startswith("Unknown variable reference")
+
+
+@pytest.mark.asyncio
+async def test_shell_syntax_diagnostics_return_on_save(tmp_path: Path) -> None:
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", "all:\n\t@echo hi\n")
+        diagnostics = await session.wait_for_diagnostics(uri)
+        assert diagnostics == []
+
+        await session.change_document(uri, "all:\n\t@if true; then echo hi\n")
+        diagnostics = await session.wait_for_diagnostics(uri)
+        assert diagnostics == []
+
+        await session.save_document(uri)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].range.start.line == 1
+    assert diagnostics[0].message.startswith("Invalid shell syntax in recipe")
+
+
+@pytest.mark.asyncio
+async def test_server_advertises_document_save_notifications(tmp_path: Path) -> None:
+    async with LspSession(tmp_path) as session:
+        assert session.initialize_result is not None
+        capabilities = session.initialize_result.capabilities
+
+    assert isinstance(capabilities.text_document_sync, lsp.TextDocumentSyncOptions)
+    assert capabilities.text_document_sync.save == lsp.SaveOptions(include_text=False)
 
 
 @pytest.mark.asyncio
@@ -373,8 +521,11 @@ async def test_shell_heavy_assignment_does_not_poison_later_rules(tmp_path: Path
     async with LspSession(tmp_path) as session:
         uri = await session.open_document("Makefile", text)
         diagnostics = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 4, 1)
 
-    assert diagnostics == []
+    assert all(diagnostic.severity != lsp.DiagnosticSeverity.Error for diagnostic in diagnostics)
+    assert hover is not None
+    assert hover_value(hover).startswith('```make\namalg:\n\t$(MAKE) all "LJCORE_O=ljamalg.o"\n```')
 
 
 @pytest.mark.asyncio

@@ -1,31 +1,37 @@
 # make-ls plan
 
-Build a small, typed Makefile language server in Python.
+## Goal
 
-Use:
+Give `make-ls` a richer symbol model so diagnostics and editor features can
+reason about symbol context instead of piling on span-only heuristics.
 
-- `uv`
-- `pygls` and `lsprotocol`
-- `ruff`
-- `basedpyright`
-- `pytest`
+The immediate target is conditional context:
 
-Keep the code direct. Own the Make parser. Use `bash -n` for recipe syntax checks. Avoid abstraction creep.
+- know whether a symbol is in a conditional test or a guarded body
+- know which simple guards are active for a symbol use
+- use that for unknown-variable warnings first
 
-Current scope:
+## Constraints
 
-- hover, go-to-definition, and references for targets and variables
-- hover for common GNU Make directives, functions, builtin variables, and special targets
-- variable rename
-- `check` subcommand for batch diagnostics
-- Makefile syntax diagnostics
-- recipe shell syntax diagnostics
-- target lookup through explicit include directives
+- keep the analyzer recovery-first and direct
+- do not replace the owned parser with a bigger AST system
+- preserve the existing LSP behavior while the model grows underneath it
+- keep nuanced guard logic commented at the decision point
 
-Next:
+## Phases
 
-1. Broaden GNU Make coverage for include path expansion, pattern rules, and prerequisite shapes.
-2. Add more end-to-end coverage for document changes and include-heavy layouts.
-3. Only then consider editor extras like completion or semantic tokens.
+1. Add recovered forms and contextual symbol sites to `AnalyzedDocument`.
+2. Recover top-level conditional guards and thread them onto symbol sites.
+3. Move unknown-variable warnings onto the contextual model.
+4. Migrate references, rename, and hover to use the richer symbol context.
+5. Broaden recovered forms later for includes, `define`, and more GNU Make
+   shapes once the conditional path is stable.
 
-Update this file only when scope or direction changes.
+## Current execution
+
+Land phases 1 to 3 in a reviewable slice:
+
+- add typed forms and symbol context
+- recover conditional test/body context and simple guards
+- suppress unknown-variable warnings only when the active guard proves the
+  variable is meant to exist, such as `ifneq ($(VAR),)` and `ifdef VAR`

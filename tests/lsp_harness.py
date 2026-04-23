@@ -34,6 +34,7 @@ class LspSession:
         self.client = LanguageClient("make-ls-tests", "0.1.0")
         self.diagnostics: asyncio.Queue[lsp.PublishDiagnosticsParams] = asyncio.Queue()
         self.initialize_result: lsp.InitializeResult | None = None
+        self._versions: dict[str, int] = {}
 
         def capture_diagnostics(
             _client: LanguageClient, params: lsp.PublishDiagnosticsParams
@@ -80,6 +81,7 @@ class LspSession:
         path = self.root / relative_path
         _ = path.write_text(text, encoding="utf-8")
         uri = path.as_uri()
+        self._versions[uri] = 1
 
         self.client.text_document_did_open(
             lsp.DidOpenTextDocumentParams(
@@ -92,6 +94,23 @@ class LspSession:
             )
         )
         return uri
+
+    async def change_document(self, uri: str, text: str) -> None:
+        version = self._versions[uri] + 1
+        self._versions[uri] = version
+        self.client.text_document_did_change(
+            lsp.DidChangeTextDocumentParams(
+                text_document=lsp.VersionedTextDocumentIdentifier(uri=uri, version=version),
+                content_changes=[lsp.TextDocumentContentChangeWholeDocument(text=text)],
+            )
+        )
+
+    async def save_document(self, uri: str) -> None:
+        self.client.text_document_did_save(
+            lsp.DidSaveTextDocumentParams(
+                text_document=lsp.TextDocumentIdentifier(uri=uri),
+            )
+        )
 
     async def wait_for_diagnostics(self, uri: str) -> list[lsp.Diagnostic]:
         while True:

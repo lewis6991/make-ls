@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from collections import defaultdict, deque
+from dataclasses import dataclass
 
 from lsprotocol import types as lsp
 
@@ -15,15 +17,19 @@ from .builtin_docs import (
 )
 from .types import (
     AnalyzedDocument,
+    DocumentForm,
+    FormKind,
     RecipeLine,
     Span,
+    SymbolContext,
+    SymbolContextKind,
     SymbolOccurrence,
     TargetDefinition,
     VariableDefinition,
+    VariableGuard,
 )
 
 COMMENT_RE = re.compile(r"^[ ]*#(?P<text>.*)$")
-ENV_STYLE_VARIABLE_RE = re.compile(r"^_?[A-Z][A-Z0-9_]*$")
 TOKEN_RE = re.compile(r"\S+")
 BUILTIN_DIRECTIVE_TOKEN_RE = re.compile(r"-?[A-Za-z][A-Za-z0-9-]*")
 BUILTIN_FUNCTION_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]*")
@@ -43,19 +49,36 @@ MAKE_AUTOMATIC_VARIABLE_RE = re.compile(
     r"\$\(([@%<?^+*|][DF]?)\)|\$\{([@%<?^+*|][DF]?)\}|\$([@%<?^+*|])"
 )
 VARIABLE_REFERENCE_DELIMITERS = {"(": ")", "{": "}"}
+CONDITIONAL_DIRECTIVES = frozenset({"ifdef", "ifeq", "ifndef", "ifneq"})
+CONDITIONAL_CONTROL_DIRECTIVES = CONDITIONAL_DIRECTIVES | frozenset({"else", "endif"})
 RECIPE_BODY_DIRECTIVES = frozenset({"else", "endif", "ifdef", "ifeq", "ifndef", "ifneq"})
 RULE_DIRECTIVES = frozenset(DIRECTIVE_DOCS)
 INCLUDE_DIRECTIVES = frozenset({"include", "-include", "sinclude"})
 VARIABLE_NAME_RE = re.compile(r"^[A-Za-z0-9_.%/@+-]+$")
+EMPTY_CONDITIONAL_ARGUMENTS = frozenset({"", '""', "''"})
 
 
-def analyze_document(uri: str, version: int | None, source: str) -> AnalyzedDocument:
+def analyze_document(
+    uri: str,
+    version: int | None,
+    source: str,
+    *,
+    include_shell_diagnostics: bool = True,
+) -> AnalyzedDocument:
     source_lines = source.splitlines()
     target_map: defaultdict[str, list[TargetDefinition]] = defaultdict(list)
     variable_map: defaultdict[str, list[VariableDefinition]] = defaultdict(list)
     phony_targets: set[str] = set()
     occurrences: list[SymbolOccurrence] = []
+    forms: list[DocumentForm] = []
     recipe_lines: list[RecipeLine] = []
+    (
+        recovered_conditional_forms,
+        recovered_conditional_occurrences,
+        line_guards,
+    ) = _recover_conditionals(source_lines)
+    forms.extend(recovered_conditional_forms)
+    _record_occurrences(occurrences, recovered_conditional_occurrences)
     recovered_includes, recovered_include_lines = _recover_include_directives(source_lines)
     (
         recovered_target_definitions,
@@ -63,8 +86,10 @@ def analyze_document(uri: str, version: int | None, source: str) -> AnalyzedDocu
         recovered_rule_references,
         recovered_recipe_lines,
         recovered_rule_lines,
-    ) = _recover_rules(source_lines)
+        recovered_rule_forms,
+    ) = _recover_rules(source_lines, line_guards)
     phony_targets.update(_declared_phony_targets(recovered_target_definitions))
+    forms.extend(recovered_rule_forms)
     recipe_lines.extend(recovered_recipe_lines)
     _record_occurrences(occurrences, recovered_target_occurrences)
     _record_occurrences(occurrences, recovered_rule_references)
@@ -76,9 +101,21 @@ def analyze_document(uri: str, version: int | None, source: str) -> AnalyzedDocu
         recovered_occurrences,
         recovered_assignment_lines,
         recovered_assignment_diagnostics,
-    ) = _recover_variable_assignments(source_lines)
+        recovered_assignment_forms,
+    ) = _recover_variable_assignments(source_lines, line_guards)
+    forms.extend(recovered_assignment_forms)
     for definition in recovered_definitions:
-        _record_variable_definition(variable_map, occurrences, definition)
+        _record_variable_definition(
+            variable_map,
+            occurrences,
+            definition,
+            context=_symbol_context(
+                "assignment",
+                "assignment_definition",
+                line_guards,
+                definition.name_span.start_line,
+            ),
+        )
     _record_occurrences(occurrences, recovered_occurrences)
 
     make_diagnostics = _collect_make_syntax_diagnostics(
@@ -90,7 +127,9 @@ def analyze_document(uri: str, version: int | None, source: str) -> AnalyzedDocu
         variable_map,
         occurrences,
     )
-    shell_diagnostics = _collect_shell_diagnostics(recipe_lines)
+    shell_diagnostics = (
+        _collect_shell_diagnostics(recipe_lines) if include_shell_diagnostics else []
+    )
 
     return AnalyzedDocument(
         uri=uri,
@@ -100,6 +139,7 @@ def analyze_document(uri: str, version: int | None, source: str) -> AnalyzedDocu
         includes=tuple(recovered_includes),
         phony_targets=frozenset(phony_targets),
         occurrences=tuple(occurrences),
+        forms=tuple(forms),
         diagnostics=tuple(
             [
                 *make_diagnostics,
@@ -655,6 +695,8 @@ def _record_variable_definition(
     variable_map: defaultdict[str, list[VariableDefinition]],
     occurrences: list[SymbolOccurrence],
     definition: VariableDefinition,
+    *,
+    context: SymbolContext | None = None,
 ) -> None:
     if any(
         existing.name_span == definition.name_span for existing in variable_map[definition.name]
@@ -670,6 +712,7 @@ def _record_variable_definition(
                 role="definition",
                 name=definition.name,
                 span=definition.name_span,
+                context=context,
             )
         ],
     )
@@ -712,6 +755,207 @@ def _append_location(
 
     locations.append(lsp.Location(uri=uri, range=span.to_lsp_range()))
     seen.add(key)
+
+
+@dataclass(frozen=True, slots=True)
+class _ConditionalFrame:
+    current_guards: tuple[VariableGuard, ...]
+    else_guards: tuple[VariableGuard, ...]
+
+
+def _recover_conditionals(
+    source_lines: list[str],
+) -> tuple[list[DocumentForm], list[SymbolOccurrence], dict[int, tuple[VariableGuard, ...]]]:
+    forms: list[DocumentForm] = []
+    occurrences: list[SymbolOccurrence] = []
+    line_guards: dict[int, tuple[VariableGuard, ...]] = {}
+    condition_stack: list[_ConditionalFrame] = []
+    line_number = 0
+    in_define_block = False
+
+    while line_number < len(source_lines):
+        line = source_lines[line_number]
+        stripped = line.strip()
+        active_guards = _active_condition_guards(condition_stack)
+
+        if _starts_define_block(stripped):
+            in_define_block = True
+            if active_guards:
+                line_guards[line_number] = active_guards
+            line_number += 1
+            continue
+        if in_define_block:
+            if active_guards:
+                line_guards[line_number] = active_guards
+            if stripped == "endef":
+                in_define_block = False
+            line_number += 1
+            continue
+
+        if line.startswith("\t"):
+            if active_guards:
+                line_guards[line_number] = active_guards
+            line_number += 1
+            continue
+
+        if _continues_previous_top_level_line(source_lines, line_number):
+            if active_guards:
+                line_guards[line_number] = active_guards
+            line_number += 1
+            continue
+
+        logical_end_line = _logical_top_level_end(source_lines, line_number)
+        logical_text = ""
+        for logical_line in range(line_number, logical_end_line + 1):
+            text = _strip_make_comment(source_lines[logical_line]).strip()
+            if logical_line < logical_end_line and text.endswith("\\"):
+                text = text[:-1].rstrip()
+            if text != "":
+                logical_text += (" " if logical_text else "") + text
+
+        first_token, _separator, _remainder = logical_text.partition(" ")
+        if first_token in CONDITIONAL_CONTROL_DIRECTIVES:
+            if first_token in CONDITIONAL_DIRECTIVES:
+                forms.append(
+                    DocumentForm(
+                        kind="conditional",
+                        span=Span(
+                            line_number,
+                            0,
+                            logical_end_line,
+                            len(source_lines[logical_end_line]),
+                        ),
+                    )
+                )
+                context = SymbolContext(
+                    form_kind="conditional",
+                    kind="conditional_test",
+                    active_guards=active_guards,
+                )
+                for directive_line in range(line_number, logical_end_line + 1):
+                    occurrences.extend(
+                        _recover_variable_references_from_text(
+                            source_lines[directive_line],
+                            directive_line,
+                            context=context,
+                        )
+                    )
+                current_guards, else_guards = _conditional_branch_guards(logical_text)
+                condition_stack.append(
+                    _ConditionalFrame(
+                        current_guards=current_guards,
+                        else_guards=else_guards,
+                    )
+                )
+            elif first_token == "else":
+                if condition_stack:
+                    current_guards = condition_stack[-1].current_guards
+                    else_guards = condition_stack[-1].else_guards
+                    condition_stack[-1] = _ConditionalFrame(
+                        current_guards=else_guards,
+                        else_guards=current_guards,
+                    )
+            elif first_token == "endif" and condition_stack:
+                _ = condition_stack.pop()
+
+            line_number = logical_end_line + 1
+            continue
+
+        if active_guards:
+            for guarded_line in range(line_number, logical_end_line + 1):
+                line_guards[guarded_line] = active_guards
+        line_number = logical_end_line + 1
+
+    return forms, occurrences, line_guards
+
+
+def _active_condition_guards(
+    condition_stack: list[_ConditionalFrame],
+) -> tuple[VariableGuard, ...]:
+    return tuple(
+        guard
+        for frame in condition_stack
+        for guard in frame.current_guards
+    )
+
+
+def _conditional_branch_guards(
+    logical_text: str,
+) -> tuple[tuple[VariableGuard, ...], tuple[VariableGuard, ...]]:
+    first_token, _separator, remainder = logical_text.partition(" ")
+    remainder = remainder.strip()
+
+    if first_token in {"ifdef", "ifndef"}:
+        if VARIABLE_NAME_RE.fullmatch(remainder) is None:
+            return (), ()
+        if first_token == "ifdef":
+            return (
+                (VariableGuard(remainder, "defined"),),
+                (VariableGuard(remainder, "undefined"),),
+            )
+        return (
+            (VariableGuard(remainder, "undefined"),),
+            (VariableGuard(remainder, "defined"),),
+        )
+
+    if first_token not in {"ifeq", "ifneq"}:
+        return (), ()
+
+    left, right = _conditional_arguments(remainder)
+    if left is None or right is None:
+        return (), ()
+
+    name: str | None = None
+    if _conditional_argument_is_empty(left):
+        name = _simple_variable_reference_name(right)
+    elif _conditional_argument_is_empty(right):
+        name = _simple_variable_reference_name(left)
+    if name is None:
+        return (), ()
+
+    if first_token == "ifneq":
+        return (
+            (VariableGuard(name, "nonempty"),),
+            (VariableGuard(name, "empty"),),
+        )
+    return (
+        (VariableGuard(name, "empty"),),
+        (VariableGuard(name, "nonempty"),),
+    )
+
+
+def _conditional_arguments(text: str) -> tuple[str | None, str | None]:
+    if not (text.startswith("(") and text.endswith(")")):
+        return None, None
+    arguments = text[1:-1]
+    separator_index = arguments.find(",")
+    if separator_index == -1:
+        return None, None
+    return arguments[:separator_index].strip(), arguments[separator_index + 1 :].strip()
+
+
+def _conditional_argument_is_empty(text: str) -> bool:
+    return text in EMPTY_CONDITIONAL_ARGUMENTS
+
+
+def _simple_variable_reference_name(text: str) -> str | None:
+    match = VARIABLE_REFERENCE_RE.fullmatch(text)
+    if match is None:
+        return None
+    return match.group("paren") or match.group("brace")
+
+
+def _symbol_context(
+    form_kind: FormKind,
+    kind: SymbolContextKind,
+    line_guards: dict[int, tuple[VariableGuard, ...]],
+    line_number: int,
+) -> SymbolContext:
+    return SymbolContext(
+        form_kind=form_kind,
+        kind=kind,
+        active_guards=line_guards.get(line_number, ()),
+    )
 
 
 def _collect_shell_diagnostics(recipe_lines: list[RecipeLine]) -> list[lsp.Diagnostic]:
@@ -803,7 +1047,11 @@ def _collect_unknown_variable_diagnostics(
         if occurrence.name in variable_map:
             continue
         occurrence_text = _slice_text_span(source, occurrence.span)
-        if not _should_warn_for_unknown_variable(occurrence.name, occurrence_text):
+        if not _should_warn_for_unknown_variable(
+            occurrence.name,
+            occurrence_text,
+            occurrence.context,
+        ):
             continue
 
         diagnostics.append(
@@ -861,18 +1109,21 @@ def _strip_recipe_prefix(raw_text: str) -> tuple[int, str]:
 
 def _recover_rules(
     source_lines: list[str],
+    line_guards: dict[int, tuple[VariableGuard, ...]],
 ) -> tuple[
     list[TargetDefinition],
     list[SymbolOccurrence],
     list[SymbolOccurrence],
     list[RecipeLine],
     set[int],
+    list[DocumentForm],
 ]:
     definitions: list[TargetDefinition] = []
     target_occurrences: list[SymbolOccurrence] = []
     reference_occurrences: list[SymbolOccurrence] = []
     recipe_lines: list[RecipeLine] = []
     parsed_lines: set[int] = set()
+    forms: list[DocumentForm] = []
     line_number = 0
     in_define_block = False
 
@@ -893,7 +1144,7 @@ def _recover_rules(
             line_number += 1
             continue
 
-        recovered_rule = _recover_rule(source_lines, line_number)
+        recovered_rule = _recover_rule(source_lines, line_number, line_guards)
         if recovered_rule is None:
             line_number += 1
             continue
@@ -904,20 +1155,23 @@ def _recover_rules(
             recovered_reference_occurrences,
             recovered_recipe_lines,
             next_line_number,
+            recovered_rule_form,
         ) = recovered_rule
         definitions.extend(recovered_definitions)
         target_occurrences.extend(recovered_target_occurrences)
         reference_occurrences.extend(recovered_reference_occurrences)
         recipe_lines.extend(recovered_recipe_lines)
+        forms.append(recovered_rule_form)
         parsed_lines.update(range(line_number, next_line_number))
         line_number = next_line_number
 
-    return definitions, target_occurrences, reference_occurrences, recipe_lines, parsed_lines
+    return definitions, target_occurrences, reference_occurrences, recipe_lines, parsed_lines, forms
 
 
 def _recover_rule(
     source_lines: list[str],
     start_line: int,
+    line_guards: dict[int, tuple[VariableGuard, ...]],
 ) -> (
     tuple[
         list[TargetDefinition],
@@ -925,6 +1179,7 @@ def _recover_rule(
         list[SymbolOccurrence],
         list[RecipeLine],
         int,
+        DocumentForm,
     ]
     | None
 ):
@@ -981,6 +1236,7 @@ def _recover_rule(
         if rule_recipe_lines
         else len(source_lines[header_end_line])
     )
+    rule_span = Span(start_line, 0, rule_end_line, rule_end_character)
     rule_text = header_text if recipe_text is None else f"{header_text}\n{recipe_text}"
     targets_text = header_lines[0][:separator_index]
     if targets_text.strip() == "":
@@ -995,7 +1251,7 @@ def _recover_rule(
         definition = TargetDefinition(
             name=target_name,
             name_span=name_span,
-            rule_span=Span(start_line, 0, rule_end_line, rule_end_character),
+            rule_span=rule_span,
             prerequisites=_recover_prerequisites(header_lines, separator_index, separator_width),
             rule_text=rule_text,
             recipe_text=recipe_text,
@@ -1007,6 +1263,7 @@ def _recover_rule(
                 role="definition",
                 name=target_name,
                 span=name_span,
+                context=_symbol_context("rule", "target_definition", line_guards, start_line),
             )
         )
 
@@ -1016,12 +1273,15 @@ def _recover_rule(
             start_line,
             separator_index,
             separator_width,
+            line_guards,
         )
     )
     for recipe_line in rule_recipe_lines:
         reference_occurrences.extend(
             _recover_variable_references_from_text(
-                recipe_line.raw_text, recipe_line.span.start_line
+                recipe_line.raw_text,
+                recipe_line.span.start_line,
+                context=_symbol_context("rule", "recipe", line_guards, recipe_line.span.start_line),
             )
         )
 
@@ -1031,6 +1291,7 @@ def _recover_rule(
         reference_occurrences,
         rule_recipe_lines,
         next_line_number,
+        DocumentForm(kind="rule", span=rule_span),
     )
 
 
@@ -1081,6 +1342,7 @@ def _recover_prerequisite_occurrences(
     start_line: int,
     separator_index: int,
     separator_width: int,
+    line_guards: dict[int, tuple[VariableGuard, ...]],
 ) -> list[SymbolOccurrence]:
     occurrences: list[SymbolOccurrence] = []
     for line_offset, line in enumerate(header_lines):
@@ -1094,7 +1356,12 @@ def _recover_prerequisite_occurrences(
         line_number = start_line + line_offset
 
         occurrences.extend(
-            _recover_variable_references_from_text(text, line_number, start_character)
+            _recover_variable_references_from_text(
+                text,
+                line_number,
+                start_character,
+                context=_symbol_context("rule", "prerequisite", line_guards, line_number),
+            )
         )
         for match in TOKEN_RE.finditer(text):
             token = match.group(0)
@@ -1115,6 +1382,7 @@ def _recover_prerequisite_occurrences(
                         line_number,
                         start_character + match.end(),
                     ),
+                    context=_symbol_context("rule", "prerequisite", line_guards, line_number),
                 )
             )
 
@@ -1125,6 +1393,8 @@ def _recover_variable_references_from_text(
     text: str,
     line_number: int,
     start_character: int = 0,
+    *,
+    context: SymbolContext | None = None,
 ) -> list[SymbolOccurrence]:
     occurrences: list[SymbolOccurrence] = []
     for reference in VARIABLE_REFERENCE_RE.finditer(text):
@@ -1142,6 +1412,7 @@ def _recover_variable_references_from_text(
                     line_number,
                     start_character + reference.end(),
                 ),
+                context=context,
             )
         )
     return occurrences
@@ -1302,11 +1573,19 @@ def _slice_source_lines(
 
 def _recover_variable_assignments(
     source_lines: list[str],
-) -> tuple[list[VariableDefinition], list[SymbolOccurrence], set[int], list[lsp.Diagnostic]]:
+    line_guards: dict[int, tuple[VariableGuard, ...]],
+) -> tuple[
+    list[VariableDefinition],
+    list[SymbolOccurrence],
+    set[int],
+    list[lsp.Diagnostic],
+    list[DocumentForm],
+]:
     definitions: list[VariableDefinition] = []
     occurrences: list[SymbolOccurrence] = []
     recovered_lines: set[int] = set()
     diagnostics: list[lsp.Diagnostic] = []
+    forms: list[DocumentForm] = []
 
     line_number = 0
     in_define_block = False
@@ -1338,32 +1617,26 @@ def _recover_variable_assignments(
         value_start = match.start("value")
         value = _assignment_value_text(source_lines, line_number, value_start, end_line)
         name_span = Span(line_number, match.start("name"), line_number, match.end("name"))
+        assignment_span = Span(
+            line_number,
+            match.start("name"),
+            end_line,
+            len(source_lines[end_line]),
+        )
 
         definitions.append(
             _with_variable_comments(
                 VariableDefinition(
                     name=name,
                     name_span=name_span,
-                    assignment_span=Span(
-                        line_number,
-                        match.start("name"),
-                        end_line,
-                        len(source_lines[end_line]),
-                    ),
+                    assignment_span=assignment_span,
                     operator=operator,
                     value=value,
                 ),
                 source_lines,
             )
         )
-        occurrences.append(
-            SymbolOccurrence(
-                kind="variable",
-                role="definition",
-                name=name,
-                span=name_span,
-            )
-        )
+        forms.append(DocumentForm(kind="assignment", span=assignment_span))
         recovered_lines.update(range(line_number, end_line + 1))
 
         if end_line == line_number:
@@ -1381,11 +1654,12 @@ def _recover_variable_assignments(
                 line_number,
                 value_start,
                 end_line,
+                line_guards,
             )
         )
         line_number = end_line + 1
 
-    return definitions, occurrences, recovered_lines, diagnostics
+    return definitions, occurrences, recovered_lines, diagnostics, forms
 
 
 def _assignment_value_text(
@@ -1411,15 +1685,21 @@ def _recover_variable_references_from_assignment_lines(
     start_line: int,
     value_start: int,
     end_line: int,
+    line_guards: dict[int, tuple[VariableGuard, ...]],
 ) -> list[SymbolOccurrence]:
     occurrences = _recover_variable_references_from_text(
         source_lines[start_line][value_start:],
         start_line,
         value_start,
+        context=_symbol_context("assignment", "assignment_value", line_guards, start_line),
     )
     for line_number in range(start_line + 1, end_line + 1):
         occurrences.extend(
-            _recover_variable_references_from_text(source_lines[line_number], line_number)
+            _recover_variable_references_from_text(
+                source_lines[line_number],
+                line_number,
+                context=_symbol_context("assignment", "assignment_value", line_guards, line_number),
+            )
         )
     return occurrences
 
@@ -1652,7 +1932,11 @@ def _dependency_tree_shallowest_depths(document: AnalyzedDocument, root: str) ->
     return depths
 
 
-def _should_warn_for_unknown_variable(name: str, occurrence_text: str) -> bool:
+def _should_warn_for_unknown_variable(
+    name: str,
+    occurrence_text: str,
+    context: SymbolContext | None,
+) -> bool:
     if name.isdigit():
         return False
     if occurrence_text.startswith("${"):
@@ -1663,7 +1947,18 @@ def _should_warn_for_unknown_variable(name: str, occurrence_text: str) -> bool:
         return False
     if _is_make_automatic_variable_name(name):
         return False
-    return ENV_STYLE_VARIABLE_RE.fullmatch(name) is None
+    if context is not None:
+        if context.kind == "conditional_test":
+            return False
+        # Only suppress when the active guard proves this exact variable is
+        # present. That keeps typoed guard names warning while allowing guarded
+        # uses such as `ifneq ($(VAR),)` then `$(VAR)`.
+        if any(
+            guard.name == name and guard.kind in {"defined", "nonempty"}
+            for guard in context.active_guards
+        ):
+            return False
+    return name not in os.environ
 
 
 def _is_make_automatic_variable_name(name: str) -> bool:

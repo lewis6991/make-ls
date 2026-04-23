@@ -41,7 +41,14 @@ class MakeLsLanguageServer(LanguageServer):
         if cached is not None and cached.version == document.version:
             return cached
 
-        analyzed = analyze_document(uri, document.version, document.source)
+        # Recipe shell diagnostics shell out to `bash -n`, so keep the cached
+        # edit-path analysis shell-free and only opt into them on open/save.
+        analyzed = analyze_document(
+            uri,
+            document.version,
+            document.source,
+            include_shell_diagnostics=False,
+        )
         self._documents[uri] = analyzed
         return analyzed
 
@@ -59,7 +66,12 @@ class MakeLsLanguageServer(LanguageServer):
         ):
             return cached
 
-        analyzed = analyze_document(uri, None, path.read_text(encoding="utf-8"))
+        analyzed = analyze_document(
+            uri,
+            None,
+            path.read_text(encoding="utf-8"),
+            include_shell_diagnostics=False,
+        )
         self._documents[uri] = analyzed
         self._disk_signatures[uri] = signature
         return analyzed
@@ -98,8 +110,17 @@ class MakeLsLanguageServer(LanguageServer):
         _ = self._documents.pop(uri, None)
         _ = self._disk_signatures.pop(uri, None)
 
-    def publish_document_diagnostics(self, uri: str) -> None:
-        analyzed = self.analyze_uri(uri)
+    def publish_document_diagnostics(self, uri: str, *, include_shell_diagnostics: bool) -> None:
+        if include_shell_diagnostics:
+            document = self.workspace.get_text_document(uri)
+            analyzed = analyze_document(
+                uri,
+                document.version,
+                document.source,
+                include_shell_diagnostics=True,
+            )
+        else:
+            analyzed = self.analyze_uri(uri)
         LOGGER.debug(
             "textDocument/publishDiagnostics uri=%s count=%d",
             uri,
@@ -119,7 +140,10 @@ def create_server() -> MakeLsLanguageServer:
             params.text_document.uri,
             params.text_document.version,
         )
-        ls.publish_document_diagnostics(params.text_document.uri)
+        ls.publish_document_diagnostics(
+            params.text_document.uri,
+            include_shell_diagnostics=True,
+        )
 
     _ = server.feature(lsp.TEXT_DOCUMENT_DID_OPEN)(did_open)
 
@@ -130,9 +154,23 @@ def create_server() -> MakeLsLanguageServer:
             params.text_document.version,
             len(params.content_changes),
         )
-        ls.publish_document_diagnostics(params.text_document.uri)
+        ls.publish_document_diagnostics(
+            params.text_document.uri,
+            include_shell_diagnostics=False,
+        )
 
     _ = server.feature(lsp.TEXT_DOCUMENT_DID_CHANGE)(did_change)
+
+    def did_save(ls: MakeLsLanguageServer, params: lsp.DidSaveTextDocumentParams) -> None:
+        LOGGER.debug("textDocument/didSave uri=%s", params.text_document.uri)
+        ls.publish_document_diagnostics(
+            params.text_document.uri,
+            include_shell_diagnostics=True,
+        )
+
+    _ = server.feature(lsp.TEXT_DOCUMENT_DID_SAVE, lsp.SaveOptions(include_text=False))(
+        did_save
+    )
 
     def did_close(ls: MakeLsLanguageServer, params: lsp.DidCloseTextDocumentParams) -> None:
         LOGGER.debug("textDocument/didClose uri=%s", params.text_document.uri)
