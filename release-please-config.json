@@ -8,6 +8,11 @@
         {
           "type": "generic",
           "path": "src/make_ls/__init__.py"
+        },
+        {
+          "type": "toml",
+          "path": "uv.lock",
+          "jsonpath": "$.package[?(@.name=='make-ls')].version"
         }
       ]
     }

@@ -9,9 +9,13 @@ from typing import Literal, cast
 ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT_PATH = ROOT / "pyproject.toml"
 PACKAGE_INIT_PATH = ROOT / "src" / "make_ls" / "__init__.py"
+UV_LOCK_PATH = ROOT / "uv.lock"
 
 _PYPROJECT_VERSION_PATTERN = re.compile(r'(?m)^(version\s*=\s*)"[^"]+"$')
 _INIT_VERSION_PATTERN = re.compile(r'(?m)^__version__ = "[^"]+"$')
+_UV_LOCK_VERSION_PATTERN = re.compile(
+    r'(?m)(^\[\[package\]\]\nname = "make-ls"\nversion\s*=\s*)"[^"]+"$'
+)
 _STABLE_VERSION_PATTERN = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 _DEV_VERSION_PATTERN = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\.dev([1-9]\d*)$")
 
@@ -79,6 +83,7 @@ def stamp_version(version: str) -> None:
     _validate_release_version(version)
     _replace_pattern(PYPROJECT_PATH, _PYPROJECT_VERSION_PATTERN, rf'\1"{version}"')
     _replace_pattern(PACKAGE_INIT_PATH, _INIT_VERSION_PATTERN, f'__version__ = "{version}"')
+    _replace_pattern(UV_LOCK_PATH, _UV_LOCK_VERSION_PATTERN, rf'\1"{version}"')
 
 
 def _parse_stable_version(version: str) -> tuple[int, int, int]:
