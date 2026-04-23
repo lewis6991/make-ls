@@ -2,43 +2,45 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from lsprotocol import types as lsp
 
 from .builtin_docs import DIRECTIVE_DOCS
 from .types import (
     DocForm,
-    FormKind,
     RecipeLine,
     Span,
     SymCtx,
-    SymCtxKind,
     SymOcc,
     TargetDef,
     VarDef,
     VarGuard,
 )
 
-COMMENT_RE = re.compile(r"^[ ]*#(?P<text>.*)$")
-TOKEN_RE = re.compile(r"\S+")
+if TYPE_CHECKING:
+    from .types import FormKind, SymCtxKind
+
+COMMENT_RE = re.compile(r'^[ ]*#(?P<text>.*)$')
+TOKEN_RE = re.compile(r'\S+')
 ASSIGNMENT_RE = re.compile(
-    r"^(?P<leading>[ ]*)(?P<prefix>(?:(?:export|override|private)\s+)*)"
-    r"(?P<name>[A-Za-z0-9_.%/@+-]+)"
-    r"[ ]*(?P<operator>[:+?!]?=)[ ]*(?P<value>.*)$"
+    r'^(?P<leading>[ ]*)(?P<prefix>(?:(?:export|override|private)\s+)*)'
+    r'(?P<name>[A-Za-z0-9_.%/@+-]+)'
+    r'[ ]*(?P<operator>[:+?!]?=)[ ]*(?P<value>.*)$'
 )
 VARIABLE_REFERENCE_RE = re.compile(
-    r"\$\((?P<paren>[A-Za-z0-9_.%/@<?^+*|!-]+)\)"
-    r"|\$\{(?P<brace>[A-Za-z0-9_.%/@<?^+*|!-]+)\}"
+    r'\$\((?P<paren>[A-Za-z0-9_.%/@<?^+*|!-]+)\)'
+    r'|\$\{(?P<brace>[A-Za-z0-9_.%/@<?^+*|!-]+)\}'
 )
-RECIPE_LOCAL_EVAL_RE = re.compile(r"^\$\(\s*eval\s+(?P<assignment>.+)\)\s*$")
-VARIABLE_REFERENCE_DELIMITERS = {"(": ")", "{": "}"}
-CONDITIONAL_DIRECTIVES = frozenset({"ifdef", "ifeq", "ifndef", "ifneq"})
-CONDITIONAL_CONTROL_DIRECTIVES = CONDITIONAL_DIRECTIVES | frozenset({"else", "endif"})
-RECIPE_BODY_DIRECTIVES = frozenset({"else", "endif", "ifdef", "ifeq", "ifndef", "ifneq"})
+RECIPE_LOCAL_EVAL_RE = re.compile(r'^\$\(\s*eval\s+(?P<assignment>.+)\)\s*$')
+VARIABLE_REFERENCE_DELIMITERS = {'(': ')', '{': '}'}
+CONDITIONAL_DIRECTIVES = frozenset({'ifdef', 'ifeq', 'ifndef', 'ifneq'})
+CONDITIONAL_CONTROL_DIRECTIVES = CONDITIONAL_DIRECTIVES | frozenset({'else', 'endif'})
+RECIPE_BODY_DIRECTIVES = frozenset({'else', 'endif', 'ifdef', 'ifeq', 'ifndef', 'ifneq'})
 RULE_DIRECTIVES = frozenset(DIRECTIVE_DOCS)
-INCLUDE_DIRECTIVES = frozenset({"include", "-include", "sinclude"})
-VARIABLE_NAME_RE = re.compile(r"^[A-Za-z0-9_.%/@+-]+$")
-EMPTY_CONDITIONAL_ARGUMENTS = frozenset({"", '""', "''"})
+INCLUDE_DIRECTIVES = frozenset({'include', '-include', 'sinclude'})
+VARIABLE_NAME_RE = re.compile(r'^[A-Za-z0-9_.%/@+-]+$')
+EMPTY_CONDITIONAL_ARGUMENTS = frozenset({'', '""', "''"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,12 +109,12 @@ def recover_conditionals(source_lines: list[str]) -> ConditionalRecovery:
         if in_define_block:
             if active_guards:
                 line_guards[line_number] = active_guards
-            if stripped == "endef":
+            if stripped == 'endef':
                 in_define_block = False
             line_number += 1
             continue
 
-        if line.startswith("\t"):
+        if line.startswith('\t'):
             if active_guards:
                 line_guards[line_number] = active_guards
             line_number += 1
@@ -125,20 +127,20 @@ def recover_conditionals(source_lines: list[str]) -> ConditionalRecovery:
             continue
 
         logical_end_line = logical_top_level_end(source_lines, line_number)
-        logical_text = ""
+        logical_text = ''
         for logical_line in range(line_number, logical_end_line + 1):
             text = _strip_make_comment(source_lines[logical_line]).strip()
             if logical_line < logical_end_line and has_unescaped_line_continuation(text):
                 text = text[:-1].rstrip()
-            if text != "":
-                logical_text += (" " if logical_text else "") + text
+            if text != '':
+                logical_text += (' ' if logical_text else '') + text
 
-        first_token, _separator, _remainder = logical_text.partition(" ")
+        first_token, _separator, _remainder = logical_text.partition(' ')
         if first_token in CONDITIONAL_CONTROL_DIRECTIVES:
             if first_token in CONDITIONAL_DIRECTIVES:
                 forms.append(
                     DocForm(
-                        kind="conditional",
+                        kind='conditional',
                         span=Span(
                             line_number,
                             0,
@@ -148,8 +150,8 @@ def recover_conditionals(source_lines: list[str]) -> ConditionalRecovery:
                     )
                 )
                 context = SymCtx(
-                    form_kind="conditional",
-                    kind="conditional_test",
+                    form_kind='conditional',
+                    kind='conditional_test',
                     active_guards=active_guards,
                 )
                 for directive_line in range(line_number, logical_end_line + 1):
@@ -167,7 +169,7 @@ def recover_conditionals(source_lines: list[str]) -> ConditionalRecovery:
                         else_guards=else_guards,
                     )
                 )
-            elif first_token == "else":
+            elif first_token == 'else':
                 if condition_stack:
                     current_guards = condition_stack[-1].current_guards
                     else_guards = condition_stack[-1].else_guards
@@ -175,7 +177,7 @@ def recover_conditionals(source_lines: list[str]) -> ConditionalRecovery:
                         current_guards=else_guards,
                         else_guards=current_guards,
                     )
-            elif first_token == "endif" and condition_stack:
+            elif first_token == 'endif' and condition_stack:
                 _ = condition_stack.pop()
 
             line_number = logical_end_line + 1
@@ -213,12 +215,12 @@ def recover_rules(
             line_number += 1
             continue
         if in_define_block:
-            if stripped == "endef":
+            if stripped == 'endef':
                 in_define_block = False
             line_number += 1
             continue
 
-        if line.startswith("\t") or continues_previous_top_level_line(source_lines, line_number):
+        if line.startswith('\t') or continues_previous_top_level_line(source_lines, line_number):
             line_number += 1
             continue
 
@@ -264,12 +266,12 @@ def recover_include_directives(source_lines: list[str]) -> IncludeRecovery:
             line_number += 1
             continue
         if in_define_block:
-            if stripped == "endef":
+            if stripped == 'endef':
                 in_define_block = False
             line_number += 1
             continue
 
-        if line.startswith("\t") or continues_previous_top_level_line(source_lines, line_number):
+        if line.startswith('\t') or continues_previous_top_level_line(source_lines, line_number):
             line_number += 1
             continue
 
@@ -313,12 +315,12 @@ def recover_variable_assignments(
             line_number += 1
             continue
         if in_define_block:
-            if stripped == "endef":
+            if stripped == 'endef':
                 in_define_block = False
             line_number += 1
             continue
 
-        if line.startswith("\t") or continues_previous_top_level_line(source_lines, line_number):
+        if line.startswith('\t') or continues_previous_top_level_line(source_lines, line_number):
             line_number += 1
             continue
 
@@ -328,14 +330,14 @@ def recover_variable_assignments(
             continue
 
         end_line = logical_top_level_end(source_lines, line_number)
-        name = match.group("name")
-        operator = match.group("operator")
-        value_start = match.start("value")
+        name = match.group('name')
+        operator = match.group('operator')
+        value_start = match.start('value')
         value = _assignment_value_text(source_lines, line_number, value_start, end_line)
-        name_span = Span(line_number, match.start("name"), line_number, match.end("name"))
+        name_span = Span(line_number, match.start('name'), line_number, match.end('name'))
         assignment_span = Span(
             line_number,
-            match.start("name"),
+            match.start('name'),
             end_line,
             len(source_lines[end_line]),
         )
@@ -354,19 +356,19 @@ def recover_variable_assignments(
         )
         occurrences.append(
             SymOcc(
-                kind="variable",
-                role="definition",
+                kind='variable',
+                role='definition',
                 name=name,
                 span=name_span,
                 context=_symbol_context(
-                    "assignment",
-                    "assignment_definition",
+                    'assignment',
+                    'assignment_definition',
                     line_guards,
                     name_span.start_line,
                 ),
             )
         )
-        forms.append(DocForm(kind="assignment", span=assignment_span))
+        forms.append(DocForm(kind='assignment', span=assignment_span))
         parsed_lines.update(range(line_number, end_line + 1))
 
         if end_line == line_number:
@@ -375,7 +377,7 @@ def recover_variable_assignments(
                     line,
                     line_number,
                     value_start,
-                    match.group("value"),
+                    match.group('value'),
                 )
             )
         occurrences.extend(
@@ -402,20 +404,20 @@ def declared_phony_targets(definitions: tuple[TargetDef, ...]) -> tuple[str, ...
     # Make allows repeated `.PHONY:` declarations, and later ones are additive.
     phony_targets: list[str] = []
     for definition in definitions:
-        if definition.name == ".PHONY":
+        if definition.name == '.PHONY':
             phony_targets.extend(definition.prerequisites)
     return tuple(phony_targets)
 
 
 def starts_define_block(stripped_line: str) -> bool:
-    return stripped_line.startswith("define ") or stripped_line.startswith("define\t")
+    return stripped_line.startswith(('define ', 'define\t'))
 
 
 def continues_previous_top_level_line(source_lines: list[str], line_number: int) -> bool:
     if line_number == 0:
         return False
     previous_line = source_lines[line_number - 1]
-    return not previous_line.startswith("\t") and has_unescaped_line_continuation(previous_line)
+    return not previous_line.startswith('\t') and has_unescaped_line_continuation(previous_line)
 
 
 def logical_top_level_end(source_lines: list[str], start_line: int) -> int:
@@ -439,30 +441,28 @@ def slice_source_lines(
         return source_lines[start_line][start_character:end_character]
 
     parts = [source_lines[start_line][start_character:]]
-    for line_number in range(start_line + 1, end_line):
-        parts.append(source_lines[line_number])
+    parts.extend(source_lines[line_number] for line_number in range(start_line + 1, end_line))
     parts.append(source_lines[end_line][:end_character])
-    return "\n".join(parts)
+    return '\n'.join(parts)
 
 
 def has_unescaped_line_continuation(text: str) -> bool:
     stripped = text.rstrip()
-    trailing_backslashes = len(stripped) - len(stripped.rstrip("\\"))
+    trailing_backslashes = len(stripped) - len(stripped.rstrip('\\'))
     return trailing_backslashes % 2 == 1
 
 
 def slice_text_span(text: str, span: Span) -> str:
     lines = text.splitlines()
     if not lines:
-        return ""
+        return ''
     if span.start_line == span.end_line:
         return lines[span.start_line][span.start_character : span.end_character]
 
     parts = [lines[span.start_line][span.start_character :]]
-    for line_number in range(span.start_line + 1, span.end_line):
-        parts.append(lines[line_number])
+    parts.extend(lines[line_number] for line_number in range(span.start_line + 1, span.end_line))
     parts.append(lines[span.end_line][: span.end_character])
-    return "\n".join(parts)
+    return '\n'.join(parts)
 
 
 def _active_condition_guards(
@@ -474,23 +474,23 @@ def _active_condition_guards(
 def _conditional_branch_guards(
     logical_text: str,
 ) -> tuple[tuple[VarGuard, ...], tuple[VarGuard, ...]]:
-    first_token, _separator, remainder = logical_text.partition(" ")
+    first_token, _separator, remainder = logical_text.partition(' ')
     remainder = remainder.strip()
 
-    if first_token in {"ifdef", "ifndef"}:
+    if first_token in {'ifdef', 'ifndef'}:
         if VARIABLE_NAME_RE.fullmatch(remainder) is None:
             return (), ()
-        if first_token == "ifdef":
+        if first_token == 'ifdef':
             return (
-                (VarGuard(remainder, "defined"),),
-                (VarGuard(remainder, "undefined"),),
+                (VarGuard(remainder, 'defined'),),
+                (VarGuard(remainder, 'undefined'),),
             )
         return (
-            (VarGuard(remainder, "undefined"),),
-            (VarGuard(remainder, "defined"),),
+            (VarGuard(remainder, 'undefined'),),
+            (VarGuard(remainder, 'defined'),),
         )
 
-    if first_token not in {"ifeq", "ifneq"}:
+    if first_token not in {'ifeq', 'ifneq'}:
         return (), ()
 
     left, right = _conditional_arguments(remainder)
@@ -505,22 +505,22 @@ def _conditional_branch_guards(
     if name is None:
         return (), ()
 
-    if first_token == "ifneq":
+    if first_token == 'ifneq':
         return (
-            (VarGuard(name, "nonempty"),),
-            (VarGuard(name, "empty"),),
+            (VarGuard(name, 'nonempty'),),
+            (VarGuard(name, 'empty'),),
         )
     return (
-        (VarGuard(name, "empty"),),
-        (VarGuard(name, "nonempty"),),
+        (VarGuard(name, 'empty'),),
+        (VarGuard(name, 'nonempty'),),
     )
 
 
 def _conditional_arguments(text: str) -> tuple[str | None, str | None]:
-    if not (text.startswith("(") and text.endswith(")")):
+    if not (text.startswith('(') and text.endswith(')')):
         return None, None
     arguments = text[1:-1]
-    separator_index = arguments.find(",")
+    separator_index = arguments.find(',')
     if separator_index == -1:
         return None, None
     return arguments[:separator_index].strip(), arguments[separator_index + 1 :].strip()
@@ -534,7 +534,7 @@ def _simple_variable_reference_name(text: str) -> str | None:
     match = VARIABLE_REFERENCE_RE.fullmatch(text)
     if match is None:
         return None
-    return match.group("paren") or match.group("brace")
+    return match.group('paren') or match.group('brace')
 
 
 def _symbol_context(
@@ -570,7 +570,7 @@ def _recover_rule(
         header_end_line + 1 < len(source_lines)
     ):
         next_line = source_lines[header_end_line + 1]
-        if next_line.startswith("\t"):
+        if next_line.startswith('\t'):
             break
         header_lines.append(next_line)
         header_end_line += 1
@@ -590,14 +590,14 @@ def _recover_rule(
 
     target_definitions: list[TargetDef] = []
     occurrences: list[SymOcc] = []
-    header_text = "\n".join(header_lines)
+    header_text = '\n'.join(header_lines)
     rule_recipe_lines: list[RecipeLine] = []
     next_line_number = header_end_line + 1
     previous_recipe_continues = False
     while next_line_number < len(source_lines):
         next_line = source_lines[next_line_number]
         stripped_next_line = next_line.strip()
-        if next_line.startswith("\t"):
+        if next_line.startswith('\t'):
             recipe_line = _recipe_line_from_source(next_line_number, next_line, start_line)
             rule_recipe_lines.append(recipe_line)
             previous_recipe_continues = has_unescaped_line_continuation(recipe_line.command_text)
@@ -614,15 +614,15 @@ def _recover_rule(
             next_line_number += 1
             continue
         if (
-            stripped_next_line == ""
-            or stripped_next_line.startswith("#")
+            stripped_next_line == ''
+            or stripped_next_line.startswith('#')
             or _is_recipe_body_directive(stripped_next_line)
         ) and _rule_body_continues(source_lines, next_line_number):
             next_line_number += 1
             continue
         break
 
-    recipe_text = "\n".join(line.raw_text for line in rule_recipe_lines) or None
+    recipe_text = '\n'.join(line.raw_text for line in rule_recipe_lines) or None
     rule_end_line = rule_recipe_lines[-1].span.end_line if rule_recipe_lines else header_end_line
     rule_end_character = (
         rule_recipe_lines[-1].span.end_character
@@ -630,12 +630,12 @@ def _recover_rule(
         else len(source_lines[header_end_line])
     )
     rule_span = Span(start_line, 0, rule_end_line, rule_end_character)
-    rule_text = header_text if recipe_text is None else f"{header_text}\n{recipe_text}"
+    rule_text = header_text if recipe_text is None else f'{header_text}\n{recipe_text}'
     for line_index, line in enumerate(header_lines[: separator_line_index + 1]):
         target_text = line[:separator_start] if line_index == separator_line_index else line
         for match in TOKEN_RE.finditer(target_text):
             target_name = match.group(0)
-            if target_name == "\\":
+            if target_name == '\\':
                 continue
 
             line_number = start_line + line_index
@@ -651,11 +651,11 @@ def _recover_rule(
             target_definitions.append(definition)
             occurrences.append(
                 SymOcc(
-                    kind="target",
-                    role="definition",
+                    kind='target',
+                    role='definition',
                     name=target_name,
                     span=name_span,
-                    context=_symbol_context("rule", "target_definition", line_guards, line_number),
+                    context=_symbol_context('rule', 'target_definition', line_guards, line_number),
                 )
             )
 
@@ -677,7 +677,7 @@ def _recover_rule(
             _recover_variable_references_from_text(
                 recipe_line.raw_text,
                 recipe_line.span.start_line,
-                context=_symbol_context("rule", "recipe", line_guards, recipe_line.span.start_line),
+                context=_symbol_context('rule', 'recipe', line_guards, recipe_line.span.start_line),
             )
         )
 
@@ -686,13 +686,13 @@ def _recover_rule(
         occurrences,
         rule_recipe_lines,
         next_line_number,
-        DocForm(kind="rule", span=rule_span),
+        DocForm(kind='rule', span=rule_span),
     )
 
 
 def _can_start_rule(line: str) -> bool:
     stripped = line.lstrip()
-    if stripped == "" or stripped.startswith("#"):
+    if stripped == '' or stripped.startswith('#'):
         return False
     if stripped.split(maxsplit=1)[0] in RULE_DIRECTIVES:
         return False
@@ -708,17 +708,17 @@ def _recover_rule_separator(header_lines: list[str]) -> tuple[int | None, int, i
 
 
 def _recover_rule_separator_in_line(line: str) -> tuple[int | None, int]:
-    separator_index = line.find(":")
+    separator_index = line.find(':')
     if separator_index == -1:
         return None, 0
-    if separator_index + 1 < len(line) and line[separator_index + 1] == "=":
+    if separator_index + 1 < len(line) and line[separator_index + 1] == '=':
         return None, 0
-    if separator_index > 0 and line[separator_index - 1] in "?+!":
+    if separator_index > 0 and line[separator_index - 1] in '?+!':
         return None, 0
 
     separator_start = separator_index
-    separator_width = 2 if line[separator_index : separator_index + 2] == "::" else 1
-    if separator_index > 0 and line[separator_index - 1] == "&":
+    separator_width = 2 if line[separator_index : separator_index + 2] == '::' else 1
+    if separator_index > 0 and line[separator_index - 1] == '&':
         separator_start -= 1
         separator_width += 1
 
@@ -739,16 +739,16 @@ def _recover_prerequisites(
             text = line[separator_start + separator_width :]
         else:
             text = line
-        text = text.split(";", 1)[0]
+        text = text.split(';', 1)[0]
         if line_index == separator_line_index and _is_target_specific_variable_assignment(text):
             return ()
         for match in TOKEN_RE.finditer(text):
             token = match.group(0)
-            if token in {"\\", "|"}:
+            if token in {'\\', '|'}:
                 continue
-            if token.startswith("#"):
+            if token.startswith('#'):
                 break
-            if "$(" in token or "${" in token:
+            if '$(' in token or '${' in token:
                 continue
             prerequisites.append(token)
     return tuple(prerequisites)
@@ -772,7 +772,7 @@ def _recover_prerequisite_occurrences(
         else:
             text = line
             start_character = 0
-        text = text.split(";", 1)[0]
+        text = text.split(';', 1)[0]
         if line_offset == separator_line_index and _is_target_specific_variable_assignment(text):
             return []
         line_number = start_line + line_offset
@@ -782,21 +782,21 @@ def _recover_prerequisite_occurrences(
                 text,
                 line_number,
                 start_character,
-                context=_symbol_context("rule", "prerequisite", line_guards, line_number),
+                context=_symbol_context('rule', 'prerequisite', line_guards, line_number),
             )
         )
         for match in TOKEN_RE.finditer(text):
             token = match.group(0)
-            if token in {"\\", "|"}:
+            if token in {'\\', '|'}:
                 continue
-            if token.startswith("#"):
+            if token.startswith('#'):
                 break
-            if "$(" in token or "${" in token:
+            if '$(' in token or '${' in token:
                 continue
             occurrences.append(
                 SymOcc(
-                    kind="target",
-                    role="reference",
+                    kind='target',
+                    role='reference',
                     name=token,
                     span=Span(
                         line_number,
@@ -804,7 +804,7 @@ def _recover_prerequisite_occurrences(
                         line_number,
                         start_character + match.end(),
                     ),
-                    context=_symbol_context("rule", "prerequisite", line_guards, line_number),
+                    context=_symbol_context('rule', 'prerequisite', line_guards, line_number),
                 )
             )
 
@@ -813,7 +813,7 @@ def _recover_prerequisite_occurrences(
 
 def _is_target_specific_variable_assignment(text: str) -> bool:
     stripped = text.strip()
-    return stripped != "" and ASSIGNMENT_RE.fullmatch(stripped) is not None
+    return stripped != '' and ASSIGNMENT_RE.fullmatch(stripped) is not None
 
 
 def _recover_variable_references_from_text(
@@ -825,13 +825,13 @@ def _recover_variable_references_from_text(
 ) -> list[SymOcc]:
     occurrences: list[SymOcc] = []
     for reference in VARIABLE_REFERENCE_RE.finditer(text):
-        reference_name = reference.group("paren") or reference.group("brace")
+        reference_name = reference.group('paren') or reference.group('brace')
         if reference_name is None:
             continue
         occurrences.append(
             SymOcc(
-                kind="variable",
-                role="reference",
+                kind='variable',
+                role='reference',
                 name=reference_name,
                 span=Span(
                     line_number,
@@ -856,13 +856,13 @@ def _recover_include_paths(
         if line_number < end_line and has_unescaped_line_continuation(text):
             text = text.rstrip()[:-1]
 
-        for token in TOKEN_RE.finditer(text):
-            tokens.append(
-                (
-                    token.group(),
-                    Span(line_number, token.start(), line_number, token.end()),
-                )
+        tokens.extend(
+            (
+                token.group(),
+                Span(line_number, token.start(), line_number, token.end()),
             )
+            for token in TOKEN_RE.finditer(text)
+        )
 
     if not tokens:
         return ()
@@ -875,7 +875,7 @@ def _recover_include_paths(
         RecoveredInclude(
             path=token,
             span=span,
-            optional=directive != "include",
+            optional=directive != 'include',
         )
         for token, span in tokens[1:]
     )
@@ -887,16 +887,16 @@ def _strip_make_comment(text: str) -> str:
         if escaped:
             escaped = False
             continue
-        if character == "\\":
+        if character == '\\':
             escaped = True
             continue
-        if character == "#":
+        if character == '#':
             return text[:index]
     return text
 
 
 def _is_recipe_body_directive(stripped_line: str) -> bool:
-    if stripped_line == "":
+    if stripped_line == '':
         return False
     return stripped_line.split(maxsplit=1)[0] in RECIPE_BODY_DIRECTIVES
 
@@ -906,10 +906,10 @@ def _rule_body_continues(source_lines: list[str], start_line: int) -> bool:
     while line_number < len(source_lines):
         line = source_lines[line_number]
         stripped = line.strip()
-        if stripped == "" or stripped.startswith("#") or _is_recipe_body_directive(stripped):
+        if stripped == '' or stripped.startswith('#') or _is_recipe_body_directive(stripped):
             line_number += 1
             continue
-        return line.startswith("\t")
+        return line.startswith('\t')
     return False
 
 
@@ -943,7 +943,7 @@ def _strip_recipe_prefix(raw_text: str) -> tuple[int, str]:
     prefix_length = 0
     # Make strips these control prefixes before invoking the shell. They are not
     # part of the shell program, so diagnostics must parse the remainder instead.
-    while prefix_length < len(raw_text) and raw_text[prefix_length] in "@+-":
+    while prefix_length < len(raw_text) and raw_text[prefix_length] in '@+-':
         prefix_length += 1
 
     return prefix_length, raw_text[prefix_length:]
@@ -978,14 +978,14 @@ def _recover_variable_references_from_assignment_lines(
         source_lines[start_line][value_start:],
         start_line,
         value_start,
-        context=_symbol_context("assignment", "assignment_value", line_guards, start_line),
+        context=_symbol_context('assignment', 'assignment_value', line_guards, start_line),
     )
     for line_number in range(start_line + 1, end_line + 1):
         occurrences.extend(
             _recover_variable_references_from_text(
                 source_lines[line_number],
                 line_number,
-                context=_symbol_context("assignment", "assignment_value", line_guards, line_number),
+                context=_symbol_context('assignment', 'assignment_value', line_guards, line_number),
             )
         )
     return occurrences
@@ -1020,16 +1020,14 @@ def _leading_comment_block(source_lines: list[str], line_number: int) -> str | N
         if match is None:
             break
 
-        text = match.group("text")
-        if text.startswith(" "):
-            text = text[1:]
+        text = match.group('text').removeprefix(' ')
         comment_lines.append(text.rstrip())
 
     if not comment_lines:
         return None
 
     comment_lines.reverse()
-    return "\n".join(comment_lines)
+    return '\n'.join(comment_lines)
 
 
 def _recover_assignment_value_diagnostics(
@@ -1045,9 +1043,9 @@ def _recover_assignment_value_diagnostics(
     index = 0
     while index < len(value):
         character = value[index]
-        if character == "$" and index + 1 < len(value):
+        if character == '$' and index + 1 < len(value):
             next_character = value[index + 1]
-            if next_character == "$":
+            if next_character == '$':
                 index += 2
                 continue
 
@@ -1078,20 +1076,20 @@ def _recover_assignment_value_diagnostics(
                 len(line),
             ).to_lsp_range(),
             message=_diagnostic_message(
-                "Invalid variable reference in assignment",
+                'Invalid variable reference in assignment',
                 value[reference_start:],
             ),
             severity=lsp.DiagnosticSeverity.Error,
-            source="make-ls",
+            source='make-ls',
         )
     ]
 
 
 def _diagnostic_message(prefix: str, snippet: str) -> str:
-    compact_snippet = " ".join(snippet.split())
-    if compact_snippet == "":
+    compact_snippet = ' '.join(snippet.split())
+    if compact_snippet == '':
         return prefix
 
     if len(compact_snippet) > 40:
-        compact_snippet = compact_snippet[:37] + "..."
-    return f"{prefix}: `{compact_snippet}`"
+        compact_snippet = compact_snippet[:37] + '...'
+    return f'{prefix}: `{compact_snippet}`'

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from typing import TYPE_CHECKING
 
 from ._analysis_diagnostics import (
     UNKNOWN_VARIABLE_DIAGNOSTIC_CODE,
@@ -27,24 +28,22 @@ from ._analysis_recovery import (
     recover_rules,
     recover_variable_assignments,
 )
-from .types import (
-    AnalyzedDoc,
-    SymOcc,
-    TargetDef,
-    VarDef,
-)
+from .types import AnalyzedDoc
+
+if TYPE_CHECKING:
+    from .types import SymOcc, TargetDef, VarDef
 
 __all__ = [
-    "UNKNOWN_VARIABLE_DIAGNOSTIC_CODE",
-    "UNRESOLVED_INCLUDE_DIAGNOSTIC_CODE",
-    "UNRESOLVED_PREREQUISITE_DIAGNOSTIC_CODE",
-    "analyze_document",
-    "def_for_pos",
-    "hover_for_pos",
-    "prep_rename_for_pos",
-    "refs_for_pos",
-    "rename_var_for_pos",
-    "resolve_variable_definition",
+    'UNKNOWN_VARIABLE_DIAGNOSTIC_CODE',
+    'UNRESOLVED_INCLUDE_DIAGNOSTIC_CODE',
+    'UNRESOLVED_PREREQUISITE_DIAGNOSTIC_CODE',
+    'analyze_document',
+    'def_for_pos',
+    'hover_for_pos',
+    'prep_rename_for_pos',
+    'refs_for_pos',
+    'rename_var_for_pos',
+    'resolve_variable_definition',
 ]
 
 

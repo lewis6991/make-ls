@@ -6,30 +6,53 @@ import json
 import logging
 import os
 import sys
-from collections.abc import Sequence
 from pathlib import Path
-from typing import TextIO
+from typing import TYPE_CHECKING, NamedTuple, TextIO
 
 from lsprotocol import types as lsp
 
 from .analysis import analyze_document
 from .server import create_server
 
-MAKEFILE_FILENAMES = frozenset({"Makefile", "makefile", "GNUmakefile"})
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+MAKEFILE_FILENAMES = frozenset({'Makefile', 'makefile', 'GNUmakefile'})
 LOG_LEVELS = {
-    "debug": logging.DEBUG,
-    "info": logging.INFO,
-    "warning": logging.WARNING,
-    "error": logging.ERROR,
+    'debug': logging.DEBUG,
+    'info': logging.INFO,
+    'warning': logging.WARNING,
+    'error': logging.ERROR,
 }
 CHECK_CONTEXT_TAB_WIDTH = 4
-ANSI_RESET = "\x1b[0m"
-ANSI_BOLD = "\x1b[1m"
-ANSI_DIM = "\x1b[2m"
-ANSI_RED = "\x1b[31m"
-ANSI_YELLOW = "\x1b[33m"
-ANSI_BLUE = "\x1b[34m"
-ANSI_CYAN = "\x1b[36m"
+ANSI_RESET = '\x1b[0m'
+ANSI_BOLD = '\x1b[1m'
+ANSI_DIM = '\x1b[2m'
+ANSI_RED = '\x1b[31m'
+ANSI_YELLOW = '\x1b[33m'
+ANSI_BLUE = '\x1b[34m'
+ANSI_CYAN = '\x1b[36m'
+
+
+class CheckedFile(NamedTuple):
+    path: Path
+    source_lines: list[str]
+    diagnostics: tuple[lsp.Diagnostic, ...]
+
+
+class DiagnosticStyle(NamedTuple):
+    name: str
+    sarif_level: str
+    ansi_code: str
+
+
+DIAGNOSTIC_STYLES: dict[int, DiagnosticStyle] = {
+    int(lsp.DiagnosticSeverity.Error): DiagnosticStyle('error', 'error', ANSI_RED),
+    int(lsp.DiagnosticSeverity.Warning): DiagnosticStyle('warning', 'warning', ANSI_YELLOW),
+    int(lsp.DiagnosticSeverity.Information): DiagnosticStyle('info', 'note', ANSI_BLUE),
+    int(lsp.DiagnosticSeverity.Hint): DiagnosticStyle('hint', 'note', ANSI_CYAN),
+}
+DEFAULT_DIAGNOSTIC_STYLE = DiagnosticStyle('diagnostic', 'note', ANSI_BOLD)
 
 
 class MakeLsArgs(argparse.Namespace):
@@ -39,6 +62,15 @@ class MakeLsArgs(argparse.Namespace):
     log_level: str
     no_log_file: bool
     paths: list[str]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.command = None
+        self.check_format = None
+        self.log_file = None
+        self.log_level = 'debug'
+        self.no_log_file = False
+        self.paths = []
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -55,61 +87,61 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         configure_logging(log_file, args.log_level)
     except OSError as error:
-        print(f"make-ls: failed to open log file {log_file}: {error}", file=sys.stderr)
+        print(f'make-ls: failed to open log file {log_file}: {error}', file=sys.stderr)
         return 2
 
-    if args.command == "check":
+    if args.command == 'check':
         return _run_check(
             args.paths,
             stdout=sys.stdout,
             stderr=sys.stderr,
-            output_format=args.check_format or "text",
+            output_format=args.check_format or 'text',
         )
 
-    logging.getLogger("make_ls").info("starting stdio server")
+    logging.getLogger('make_ls').info('starting stdio server')
     create_server().start_io()
     return 0
 
 
 def _argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="make-ls",
-        description="Makefile language server. Run without a subcommand to start stdio LSP.",
+        prog='make-ls',
+        description='Makefile language server. Run without a subcommand to start stdio LSP.',
     )
     _ = parser.add_argument(
-        "--log-file",
-        nargs="?",
-        metavar="path",
-        const="",
-        help="Write make-ls LSP logs to a file. Stdio LSP defaults to the XDG state log file.",
+        '--log-file',
+        nargs='?',
+        metavar='path',
+        const='',
+        help='Write make-ls LSP logs to a file. Stdio LSP defaults to the XDG state log file.',
     )
     _ = parser.add_argument(
-        "--log-level",
+        '--log-level',
         choices=tuple(LOG_LEVELS),
-        default="debug",
-        help="Log verbosity for the LSP log file.",
+        default='debug',
+        help='Log verbosity for the LSP log file.',
     )
     _ = parser.add_argument(
-        "--no-log-file",
-        action="store_true",
-        help="Disable the default stdio LSP log file.",
+        '--no-log-file',
+        action='store_true',
+        help='Disable the default stdio LSP log file.',
     )
-    subparsers = parser.add_subparsers(dest="command", metavar="check [paths ...]")
+    subparsers = parser.add_subparsers(dest='command', metavar='check [paths ...]')
     check_parser = subparsers.add_parser(
-        "check",
-        help="Run make-ls diagnostics over files or directories.",
+        'check',
+        help='Run make-ls diagnostics over files or directories.',
     )
     _ = check_parser.add_argument(
-        "paths",
-        nargs="*",
-        help="Files or directories to check. Defaults to the current directory.",
+        'paths',
+        nargs='*',
+        help='Files or directories to check. Defaults to the current directory.',
     )
     _ = check_parser.add_argument(
-        "--format",
-        dest="check_format",
-        choices=("text", "json"),
-        default="text",
-        help="Check output format.",
+        '--format',
+        dest='check_format',
+        choices=('text', 'json'),
+        default='text',
+        help='Check output format.',
     )
     return parser
 
@@ -125,40 +157,46 @@ def _run_check(
     if files is None:
         return 2
     if not files:
-        print("make-ls: no Makefiles found", file=stderr)
+        print('make-ls: no Makefiles found', file=stderr)
         return 2
 
-    analyzed_files: list[tuple[Path, list[str], tuple[lsp.Diagnostic, ...]]] = []
+    checked_files: list[CheckedFile] = []
     diagnostics_found = False
     for path in files:
         try:
-            source = path.read_text(encoding="utf-8")
+            source = path.read_text(encoding='utf-8')
         except (OSError, UnicodeDecodeError) as error:
-            print(f"make-ls: failed to read {path}: {error}", file=stderr)
+            print(f'make-ls: failed to read {path}: {error}', file=stderr)
             return 2
 
-        source_lines = source.splitlines()
         analyzed = analyze_document(path.resolve().as_uri(), None, source)
-        analyzed_files.append((path, source_lines, analyzed.diagnostics))
-        if analyzed.diagnostics:
+        checked_file = CheckedFile(
+            path=path,
+            source_lines=source.splitlines(),
+            diagnostics=analyzed.diagnostics,
+        )
+        checked_files.append(checked_file)
+        if checked_file.diagnostics:
             diagnostics_found = True
 
-    if output_format == "json":
-        json.dump(_sarif_log(analyzed_files), stdout, indent=2)
+    if output_format == 'json':
+        json.dump(_sarif_log(checked_files), stdout, indent=2)
         print(file=stdout)
         return 1 if diagnostics_found else 0
 
-    rendered_diagnostic = False
     use_color = _check_uses_color(stdout)
-    for path, source_lines, diagnostics in analyzed_files:
-        for diagnostic in diagnostics:
-            if rendered_diagnostic:
-                print(file=stdout)
-            print(
-                _format_diagnostic(path, diagnostic, source_lines=source_lines, color=use_color),
-                file=stdout,
-            )
-            rendered_diagnostic = True
+    rendered_diagnostics = [
+        _format_diagnostic(
+            checked_file.path,
+            diagnostic,
+            source_lines=checked_file.source_lines,
+            color=use_color,
+        )
+        for checked_file in checked_files
+        for diagnostic in checked_file.diagnostics
+    ]
+    if rendered_diagnostics:
+        print('\n\n'.join(rendered_diagnostics), file=stdout)
 
     return 1 if diagnostics_found else 0
 
@@ -168,13 +206,13 @@ def _check_files(
     *,
     stderr: TextIO,
 ) -> list[Path] | None:
-    paths = [Path(raw_path) for raw_path in raw_paths] if raw_paths else [Path(".")]
+    paths = [Path(raw_path) for raw_path in raw_paths] if raw_paths else [Path()]
     files: list[Path] = []
     seen: set[Path] = set()
 
     for path in paths:
         if not path.exists():
-            print(f"make-ls: path not found: {path}", file=stderr)
+            print(f'make-ls: path not found: {path}', file=stderr)
             return None
 
         if path.is_file():
@@ -182,7 +220,7 @@ def _check_files(
             continue
 
         if not path.is_dir():
-            print(f"make-ls: unsupported path: {path}", file=stderr)
+            print(f'make-ls: unsupported path: {path}', file=stderr)
             return None
 
         for candidate in _discover_makefiles(path):
@@ -194,16 +232,18 @@ def _check_files(
 def _discover_makefiles(root: Path) -> list[Path]:
     discovered: list[Path] = []
     for directory, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(name for name in dirnames if not name.startswith("."))
-        for filename in sorted(filenames):
-            if _is_makefile_name(filename):
-                discovered.append(Path(directory, filename))
+        dirnames[:] = sorted(name for name in dirnames if not name.startswith('.'))
+        discovered.extend(
+            Path(directory, filename)
+            for filename in sorted(filenames)
+            if _is_makefile_name(filename)
+        )
 
     return discovered
 
 
 def _is_makefile_name(name: str) -> bool:
-    return name in MAKEFILE_FILENAMES or name.endswith(".mk")
+    return name in MAKEFILE_FILENAMES or name.endswith('.mk')
 
 
 def _append_unique_path(files: list[Path], seen: set[Path], path: Path) -> None:
@@ -223,18 +263,23 @@ def _format_diagnostic(
     color: bool,
 ) -> str:
     start = diagnostic.range.start
-    severity = _diagnostic_severity_name(diagnostic.severity)
-    message = " ".join(diagnostic.message.splitlines())
-    location = f"{_display_path(path)}:{start.line + 1}:{start.character + 1}"
+    style = _diagnostic_style(diagnostic.severity)
+    message = _single_line_message(diagnostic.message)
+    location = f'{_display_path(path)}:{start.line + 1}:{start.character + 1}'
     header = (
-        f"{_styled(location, ANSI_BOLD, enabled=color)}: "
-        f"{_styled(severity, _severity_ansi_code(severity), enabled=color)}: "
-        f"{message}"
+        f'{_styled(location, ANSI_BOLD, enabled=color)}: '
+        f'{_styled(style.name, style.ansi_code, enabled=color)}: '
+        f'{message}'
     )
-    context = _format_diagnostic_context(source_lines, diagnostic, severity=severity, color=color)
+    context = _format_diagnostic_context(
+        source_lines,
+        diagnostic,
+        color_code=style.ansi_code,
+        color=color,
+    )
     if context is None:
         return header
-    return f"{header}\n{context}"
+    return f'{header}\n{context}'
 
 
 def _display_path(path: Path) -> str:
@@ -246,31 +291,25 @@ def _display_path(path: Path) -> str:
         return str(path)
 
 
-def _diagnostic_severity_name(severity: lsp.DiagnosticSeverity | int | None) -> str:
-    if severity == lsp.DiagnosticSeverity.Error:
-        return "error"
-    if severity == lsp.DiagnosticSeverity.Warning:
-        return "warning"
-    if severity == lsp.DiagnosticSeverity.Information:
-        return "info"
-    if severity == lsp.DiagnosticSeverity.Hint:
-        return "hint"
-    return "diagnostic"
+def _diagnostic_style(severity: lsp.DiagnosticSeverity | int | None) -> DiagnosticStyle:
+    if severity is None:
+        return DEFAULT_DIAGNOSTIC_STYLE
+    return DIAGNOSTIC_STYLES.get(int(severity), DEFAULT_DIAGNOSTIC_STYLE)
 
 
 def _sarif_log(
-    analyzed_files: list[tuple[Path, list[str], tuple[lsp.Diagnostic, ...]]],
+    checked_files: list[CheckedFile],
 ) -> dict[str, object]:
     rules: dict[str, dict[str, object]] = {}
     results: list[dict[str, object]] = []
-    for path, source_lines, diagnostics in analyzed_files:
-        artifact_uri = path.resolve().as_uri()
-        for diagnostic in diagnostics:
+    for checked_file in checked_files:
+        artifact_uri = checked_file.path.resolve().as_uri()
+        for diagnostic in checked_file.diagnostics:
             rule_id = _sarif_rule_id(diagnostic)
             if rule_id is not None and rule_id not in rules:
                 rules[rule_id] = {
-                    "id": rule_id,
-                    "shortDescription": {"text": _diagnostic_summary(diagnostic.message)},
+                    'id': rule_id,
+                    'shortDescription': {'text': _diagnostic_summary(diagnostic.message)},
                 }
 
             results.append(
@@ -278,22 +317,22 @@ def _sarif_log(
                     diagnostic,
                     artifact_uri=artifact_uri,
                     rule_id=rule_id,
-                    source_lines=source_lines,
+                    source_lines=checked_file.source_lines,
                 )
             )
 
-    driver: dict[str, object] = {"name": "make-ls"}
+    driver: dict[str, object] = {'name': 'make-ls'}
     if rules:
-        driver["rules"] = list(rules.values())
+        driver['rules'] = list(rules.values())
 
     return {
-        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
-        "version": "2.1.0",
-        "runs": [
+        '$schema': 'https://json.schemastore.org/sarif-2.1.0.json',
+        'version': '2.1.0',
+        'runs': [
             {
-                "tool": {"driver": driver},
-                "columnKind": "unicodeCodePoints",
-                "results": results,
+                'tool': {'driver': driver},
+                'columnKind': 'unicodeCodePoints',
+                'results': results,
             }
         ],
     }
@@ -308,26 +347,26 @@ def _sarif_result(
 ) -> dict[str, object]:
     start = diagnostic.range.start
     region: dict[str, object] = {
-        "startLine": start.line + 1,
-        "startColumn": start.character + 1,
+        'startLine': start.line + 1,
+        'startColumn': start.character + 1,
     }
     if 0 <= start.line < len(source_lines):
-        region["snippet"] = {"text": source_lines[start.line]}
+        region['snippet'] = {'text': source_lines[start.line]}
 
     result: dict[str, object] = {
-        "level": _sarif_level(diagnostic.severity),
-        "message": {"text": " ".join(diagnostic.message.splitlines())},
-        "locations": [
+        'level': _diagnostic_style(diagnostic.severity).sarif_level,
+        'message': {'text': _single_line_message(diagnostic.message)},
+        'locations': [
             {
-                "physicalLocation": {
-                    "artifactLocation": {"uri": artifact_uri},
-                    "region": region,
+                'physicalLocation': {
+                    'artifactLocation': {'uri': artifact_uri},
+                    'region': region,
                 }
             }
         ],
     }
     if rule_id is not None:
-        result["ruleId"] = rule_id
+        result['ruleId'] = rule_id
     return result
 
 
@@ -336,35 +375,31 @@ def _sarif_rule_id(diagnostic: lsp.Diagnostic) -> str | None:
         return str(diagnostic.code)
 
     message = diagnostic.message
-    if message.startswith("Invalid Makefile syntax"):
-        return "make-syntax"
-    if message.startswith("Invalid shell syntax in recipe"):
-        return "shell-syntax"
-    if message.startswith("Invalid variable reference in assignment"):
-        return "invalid-variable-reference"
+    if message.startswith('Invalid Makefile syntax'):
+        return 'make-syntax'
+    if message.startswith('Invalid shell syntax in recipe'):
+        return 'shell-syntax'
+    if message.startswith('Invalid variable reference in assignment'):
+        return 'invalid-variable-reference'
     return None
 
 
-def _sarif_level(severity: lsp.DiagnosticSeverity | int | None) -> str:
-    if severity == lsp.DiagnosticSeverity.Error:
-        return "error"
-    if severity == lsp.DiagnosticSeverity.Warning:
-        return "warning"
-    return "note"
-
-
 def _diagnostic_summary(message: str) -> str:
-    prefix, separator, _rest = message.partition(": `")
-    if separator != "":
+    prefix, separator, _rest = message.partition(': `')
+    if separator != '':
         return prefix
     return message
+
+
+def _single_line_message(message: str) -> str:
+    return ' '.join(message.splitlines())
 
 
 def _format_diagnostic_context(
     source_lines: list[str],
     diagnostic: lsp.Diagnostic,
     *,
-    severity: str,
+    color_code: str,
     color: bool,
 ) -> str | None:
     start = diagnostic.range.start
@@ -377,17 +412,15 @@ def _format_diagnostic_context(
     display_line = raw_line.expandtabs(CHECK_CONTEXT_TAB_WIDTH)
     marker_start = _display_column(raw_line, start.character)
     marker_end_character = (
-        diagnostic.range.end.character
-        if diagnostic.range.end.line == start.line
-        else len(raw_line)
+        diagnostic.range.end.character if diagnostic.range.end.line == start.line else len(raw_line)
     )
     marker_end = _display_column(raw_line, marker_end_character)
     marker_width = max(1, marker_end - marker_start)
-    marker = (" " * marker_start) + ("^" * marker_width)
-    line_prefix = _styled(f"{line_number:>{gutter_width}} | ", ANSI_DIM, enabled=color)
-    marker_prefix = _styled(f"{' ' * gutter_width} | ", ANSI_DIM, enabled=color)
-    marker_text = _styled(marker, _severity_ansi_code(severity), enabled=color)
-    return f"{line_prefix}{display_line}\n{marker_prefix}{marker_text}"
+    marker = (' ' * marker_start) + ('^' * marker_width)
+    line_prefix = _styled(f'{line_number:>{gutter_width}} | ', ANSI_DIM, enabled=color)
+    marker_prefix = _styled(f'{" " * gutter_width} | ', ANSI_DIM, enabled=color)
+    marker_text = _styled(marker, color_code, enabled=color)
+    return f'{line_prefix}{display_line}\n{marker_prefix}{marker_text}'
 
 
 def _display_column(text: str, character: int) -> int:
@@ -397,37 +430,25 @@ def _display_column(text: str, character: int) -> int:
 
 
 def _check_uses_color(stream: TextIO) -> bool:
-    force_color = os.environ.get("FORCE_COLOR")
-    if force_color not in {None, "", "0"}:
+    force_color = os.environ.get('FORCE_COLOR')
+    if force_color not in {None, '', '0'}:
         return True
-    if os.environ.get("NO_COLOR") is not None:
+    if os.environ.get('NO_COLOR') is not None:
         return False
-    isatty = getattr(stream, "isatty", None)
+    isatty = getattr(stream, 'isatty', None)
     if isatty is None or not isatty():
         return False
-    return os.environ.get("TERM", "") != "dumb"
-
-
-def _severity_ansi_code(severity: str) -> str:
-    if severity == "error":
-        return ANSI_RED
-    if severity == "warning":
-        return ANSI_YELLOW
-    if severity == "info":
-        return ANSI_BLUE
-    if severity == "hint":
-        return ANSI_CYAN
-    return ANSI_BOLD
+    return os.environ.get('TERM', '') != 'dumb'
 
 
 def _styled(text: str, *codes: str, enabled: bool) -> str:
     if not enabled or not codes:
         return text
-    return "".join(codes) + text + ANSI_RESET
+    return ''.join(codes) + text + ANSI_RESET
 
 
 def configure_logging(log_file: Path | None, log_level: str) -> None:
-    logger = logging.getLogger("make_ls")
+    logger = logging.getLogger('make_ls')
     logger.propagate = False
     for handler in list(logger.handlers):
         logger.removeHandler(handler)
@@ -440,11 +461,11 @@ def configure_logging(log_file: Path | None, log_level: str) -> None:
     # stdio LSP owns stdout, so opt-in debug output has to live in a separate file.
     log_path = log_file.expanduser()
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    handler = logging.FileHandler(log_path, encoding="utf-8")
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    handler = logging.FileHandler(log_path, encoding='utf-8')
+    handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s'))
     logger.addHandler(handler)
     logger.setLevel(LOG_LEVELS[log_level])
-    logger.info("logging enabled path=%s level=%s", log_path, log_level)
+    logger.info('logging enabled path=%s level=%s', log_path, log_level)
 
 
 def _resolved_log_file(
@@ -455,7 +476,7 @@ def _resolved_log_file(
 ) -> Path | None:
     if no_log_file:
         return None
-    if raw_log_file == "":
+    if raw_log_file == '':
         return _default_log_file()
     if raw_log_file is not None:
         return Path(raw_log_file)
@@ -466,15 +487,15 @@ def _resolved_log_file(
 
 def _default_log_file() -> Path:
     launch_path = Path.cwd().resolve()
-    launch_hash = hashlib.sha1(str(launch_path).encode("utf-8")).hexdigest()[:8]
-    raw_state_home = os.environ.get("XDG_STATE_HOME")
+    launch_hash = hashlib.sha1(str(launch_path).encode('utf-8')).hexdigest()[:8]
+    raw_state_home = os.environ.get('XDG_STATE_HOME')
     state_home = (
         Path(raw_state_home).expanduser()
         if raw_state_home is not None
-        else Path.home() / ".local" / "state"
+        else Path.home() / '.local' / 'state'
     )
-    return state_home / "make-ls" / f"make-ls-{launch_hash}.log"
+    return state_home / 'make-ls' / f'make-ls-{launch_hash}.log'
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     raise SystemExit(main())

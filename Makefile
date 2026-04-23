@@ -8,14 +8,14 @@ RELEASE_VERSION ?= $(shell $(UV) run python scripts/release_version.py compute -
 
 .PHONY: test
 test:
-	$(UV) run pytest
+	$(UV) run python -m pytest
 
 .PHONY: check
 check:
 	$(UV) run basedpyright
 	$(UV) run ruff check .
 	$(UV) run ruff format --check .
-	$(UV) run pytest
+	$(UV) run python -m pytest
 
 .PHONY: build
 build:

@@ -35,13 +35,19 @@ dev = [
 
 [tool.basedpyright]
 pythonVersion = "3.12"
-typeCheckingMode = "strict"
+typeCheckingMode = "all"
 include = ["src", "tests", "scripts"]
 venvPath = "."
 venv = ".venv"
+analyzeUnannotatedFunctions = true
 reportAny = "error"
 reportExplicitAny = "error"
+reportImplicitStringConcatenation = "none"
 reportUnusedCallResult = "error"
+reportPrivateLocalImportUsage = "none"
+strictListInference = true
+strictDictionaryInference = true
+strictSetInference = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -53,14 +59,40 @@ src = ["src", "tests", "scripts"]
 target-version = "py312"
 
 [tool.ruff.format]
-quote-style = "double"
+quote-style = 'single'
 
 [tool.ruff.lint]
 select = [
+    "A",
+    "ANN",
+    "ARG",
     "B",
+    "C4",
+    "DTZ",
     "E",
     "F",
+    "FIX",
+    "FURB",
+    "G",
     "I",
+    "INP",
+    "ISC",
+    "LOG",
+    "N",
+    "PERF",
+    "PIE",
+    "PGH",
+    "PTH",
+    "PT",
+    "RET",
     "RUF",
+    "RSE",
+    "SIM",
+    "SLF",
+    "TC",
+    "TID",
     "UP",
 ]
+
+[tool.ruff.lint.flake8-type-checking]
+strict = true

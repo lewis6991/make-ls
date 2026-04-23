@@ -3,29 +3,34 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-from collections import defaultdict
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from lsprotocol import types as lsp
 from pygls.uris import to_fs_path
 
 from . import _analysis_recovery as recovery
 from .builtin_docs import BUILTIN_VARIABLE_DOCS, SPECIAL_TARGET_DOCS
-from .types import RecipeLine, Span, SymCtx, SymOcc, VarDef
+from .types import Span
+
+if TYPE_CHECKING:
+    from collections import defaultdict
+
+    from .types import RecipeLine, SymCtx, SymOcc, VarDef
 
 MAKE_AUTOMATIC_VARIABLE_RE = re.compile(
-    r"\$\(([@%<?^+*|][DF]?)\)|\$\{([@%<?^+*|][DF]?)\}|\$([@%<?^+*|])"
+    r'\$\(([@%<?^+*|][DF]?)\)|\$\{([@%<?^+*|][DF]?)\}|\$([@%<?^+*|])'
 )
-UNKNOWN_VARIABLE_DIAGNOSTIC_CODE = "unknown-variable"
-UNRESOLVED_INCLUDE_DIAGNOSTIC_CODE = "unresolved-include"
-UNRESOLVED_PREREQUISITE_DIAGNOSTIC_CODE = "unresolved-prerequisite"
+UNKNOWN_VARIABLE_DIAGNOSTIC_CODE = 'unknown-variable'
+UNRESOLVED_INCLUDE_DIAGNOSTIC_CODE = 'unresolved-include'
+UNRESOLVED_PREREQUISITE_DIAGNOSTIC_CODE = 'unresolved-prerequisite'
 
 
 def collect_shell_diagnostics(recipe_lines: tuple[RecipeLine, ...]) -> list[lsp.Diagnostic]:
     diagnostics: list[lsp.Diagnostic] = []
     for recipe_group in _logical_recipe_lines(recipe_lines):
-        command_text = "\n".join(line.command_text for line in recipe_group)
-        if command_text.strip() == "":
+        command_text = '\n'.join(line.command_text for line in recipe_group)
+        if command_text.strip() == '':
             continue
 
         is_valid = _shell_syntax_is_valid(command_text)
@@ -41,9 +46,9 @@ def collect_shell_diagnostics(recipe_lines: tuple[RecipeLine, ...]) -> list[lsp.
                     first_line.span.start_line,
                     len(first_line.raw_text),
                 ).to_lsp_range(),
-                message=_diagnostic_message("Invalid shell syntax in recipe", command_text),
+                message=_diagnostic_message('Invalid shell syntax in recipe', command_text),
                 severity=lsp.DiagnosticSeverity.Error,
-                source="make-ls",
+                source='make-ls',
             )
         )
 
@@ -61,7 +66,7 @@ def collect_make_syntax_diagnostics(
     while line_number < len(source_lines):
         line = source_lines[line_number]
         stripped = line.strip()
-        if line_number in parsed_lines or stripped == "" or stripped.startswith("#"):
+        if line_number in parsed_lines or stripped == '' or stripped.startswith('#'):
             line_number += 1
             continue
 
@@ -71,12 +76,12 @@ def collect_make_syntax_diagnostics(
             continue
 
         if in_define_block:
-            if stripped == "endef":
+            if stripped == 'endef':
                 in_define_block = False
             line_number += 1
             continue
 
-        if line.startswith("\t"):
+        if line.startswith('\t'):
             diagnostics.append(_make_syntax_diagnostic(source_lines, line_number, line_number))
             line_number += 1
             continue
@@ -107,13 +112,13 @@ def collect_unknown_variable_diagnostics(
     diagnostics: list[lsp.Diagnostic] = []
     recipe_local_variables = _recipe_local_eval_variables(recipe_lines)
     for occurrence in occurrences:
-        if occurrence.kind != "variable" or occurrence.role != "reference":
+        if occurrence.kind != 'variable' or occurrence.role != 'reference':
             continue
         if occurrence.name in variable_map:
             continue
         if (
             occurrence.context is not None
-            and occurrence.context.kind == "recipe"
+            and occurrence.context.kind == 'recipe'
             and occurrence.name in recipe_local_variables.get(occurrence.span.start_line, ())
         ):
             continue
@@ -128,10 +133,10 @@ def collect_unknown_variable_diagnostics(
         diagnostics.append(
             lsp.Diagnostic(
                 range=occurrence.span.to_lsp_range(),
-                message=_diagnostic_message("Unknown variable reference", occurrence_text),
+                message=_diagnostic_message('Unknown variable reference', occurrence_text),
                 code=UNKNOWN_VARIABLE_DIAGNOSTIC_CODE,
                 severity=lsp.DiagnosticSeverity.Warning,
-                source="make-ls",
+                source='make-ls',
             )
         )
     return diagnostics
@@ -173,10 +178,10 @@ def collect_unresolved_include_diagnostics(
         diagnostics.append(
             lsp.Diagnostic(
                 range=include.span.to_lsp_range(),
-                message=f"Unresolved include: `{include.path}`",
+                message=f'Unresolved include: `{include.path}`',
                 code=UNRESOLVED_INCLUDE_DIAGNOSTIC_CODE,
                 severity=lsp.DiagnosticSeverity.Warning,
-                source="make-ls",
+                source='make-ls',
             )
         )
 
@@ -194,9 +199,9 @@ def collect_unresolved_prerequisite_diagnostics(
     base_directory = _uri_base_directory(uri)
     included_targets: tuple[frozenset[str], frozenset[str]] | None = None
     for occurrence in occurrences:
-        if occurrence.kind != "target" or occurrence.role != "reference":
+        if occurrence.kind != 'target' or occurrence.role != 'reference':
             continue
-        if occurrence.context is None or occurrence.context.kind != "prerequisite":
+        if occurrence.context is None or occurrence.context.kind != 'prerequisite':
             continue
         if not _should_warn_for_unresolved_prerequisite(occurrence.name):
             continue
@@ -216,10 +221,10 @@ def collect_unresolved_prerequisite_diagnostics(
         diagnostics.append(
             lsp.Diagnostic(
                 range=occurrence.span.to_lsp_range(),
-                message=_diagnostic_message("Unresolved prerequisite", occurrence.name),
+                message=_diagnostic_message('Unresolved prerequisite', occurrence.name),
                 code=UNRESOLVED_PREREQUISITE_DIAGNOSTIC_CODE,
                 severity=lsp.DiagnosticSeverity.Warning,
-                source="make-ls",
+                source='make-ls',
             )
         )
     return diagnostics
@@ -233,7 +238,7 @@ def _make_syntax_diagnostic(
     return lsp.Diagnostic(
         range=Span(start_line, 0, end_line, len(source_lines[end_line])).to_lsp_range(),
         message=_diagnostic_message(
-            "Invalid Makefile syntax",
+            'Invalid Makefile syntax',
             recovery.slice_source_lines(
                 source_lines,
                 start_line=start_line,
@@ -243,7 +248,7 @@ def _make_syntax_diagnostic(
             ),
         ),
         severity=lsp.DiagnosticSeverity.Error,
-        source="make-ls",
+        source='make-ls',
     )
 
 
@@ -256,9 +261,9 @@ def _uri_base_directory(uri: str) -> Path | None:
 
 def _is_static_include_pattern(include_pattern: str) -> bool:
     return (
-        "$(" not in include_pattern
-        and "${" not in include_pattern
-        and not any(character in include_pattern for character in "*?[]")
+        '$(' not in include_pattern
+        and '${' not in include_pattern
+        and not any(character in include_pattern for character in '*?[]')
     )
 
 
@@ -269,7 +274,7 @@ def _should_warn_for_unresolved_include(name: str) -> bool:
 def _should_warn_for_unresolved_prerequisite(name: str) -> bool:
     if name in SPECIAL_TARGET_DOCS:
         return False
-    return not any(character in name for character in "%*?[]$()")
+    return not any(character in name for character in '%*?[]$()')
 
 
 def _matches_target_names(name: str, target_names: set[str] | frozenset[str]) -> bool:
@@ -277,10 +282,10 @@ def _matches_target_names(name: str, target_names: set[str] | frozenset[str]) ->
 
 
 def _matches_target_name(name: str, target_name: str) -> bool:
-    if "%" not in target_name:
+    if '%' not in target_name:
         return name == target_name
 
-    prefix, _, suffix = target_name.partition("%")
+    prefix, _, suffix = target_name.partition('%')
     return (
         name.startswith(prefix) and name.endswith(suffix) and len(name) > len(prefix) + len(suffix)
     )
@@ -330,7 +335,7 @@ def _extend_included_target_names(
     seen_paths.add(resolved_path)
 
     try:
-        source_lines = path.read_text(encoding="utf-8").splitlines()
+        source_lines = path.read_text(encoding='utf-8').splitlines()
     except (OSError, UnicodeDecodeError):
         return
 
@@ -362,7 +367,7 @@ def _resolved_static_include_paths(
 
 
 def _is_tolerated_top_level_line(stripped_line: str) -> bool:
-    if stripped_line.startswith("$(") or stripped_line.startswith("${"):
+    if stripped_line.startswith(('$(', '${')):
         return True
     first_token = stripped_line.split(maxsplit=1)[0]
     return first_token in recovery.RULE_DIRECTIVES
@@ -373,10 +378,10 @@ def _recipe_local_eval_assignment_name(command_text: str) -> str | None:
     if match is None:
         return None
 
-    assignment_match = recovery.ASSIGNMENT_RE.match(match.group("assignment").strip())
+    assignment_match = recovery.ASSIGNMENT_RE.match(match.group('assignment').strip())
     if assignment_match is None:
         return None
-    return assignment_match.group("name")
+    return assignment_match.group('name')
 
 
 def _recipe_local_eval_variables(
@@ -406,22 +411,22 @@ def _should_warn_for_unknown_variable(
 ) -> bool:
     if name.isdigit():
         return False
-    if occurrence_text.startswith("${"):
+    if occurrence_text.startswith('${'):
         return False
-    if "$(" in name or "${" in name:
+    if '$(' in name or '${' in name:
         return False
     if name in BUILTIN_VARIABLE_DOCS:
         return False
     if _is_make_automatic_variable_name(name):
         return False
     if context is not None:
-        if context.kind == "conditional_test":
+        if context.kind == 'conditional_test':
             return False
         # Only suppress when the active guard proves this exact variable is
         # present. That keeps typoed guard names warning while allowing guarded
         # uses such as `ifneq ($(VAR),)` then `$(VAR)`.
         if any(
-            guard.name == name and guard.kind in {"defined", "nonempty"}
+            guard.name == name and guard.kind in {'defined', 'nonempty'}
             for guard in context.active_guards
         ):
             return False
@@ -429,11 +434,11 @@ def _should_warn_for_unknown_variable(
 
 
 def _is_make_automatic_variable_name(name: str) -> bool:
-    if name == "":
+    if name == '':
         return False
-    if name[0] not in "@%<?^+*|":
+    if name[0] not in '@%<?^+*|':
         return False
-    return name[1:] in {"", "D", "F"}
+    return name[1:] in {'', 'D', 'F'}
 
 
 def _logical_recipe_lines(recipe_lines: tuple[RecipeLine, ...]) -> list[list[RecipeLine]]:
@@ -457,14 +462,14 @@ def _logical_recipe_lines(recipe_lines: tuple[RecipeLine, ...]) -> list[list[Rec
 def _normalize_recipe_for_shell(command_text: str) -> str:
     # Bash does not understand Make's automatic variables such as `$<` or `$^`.
     # Replace them with a same-width shell expansion so parser ranges stay stable.
-    return MAKE_AUTOMATIC_VARIABLE_RE.sub("$a", command_text)
+    return MAKE_AUTOMATIC_VARIABLE_RE.sub('$a', command_text)
 
 
 def _shell_syntax_is_valid(command_text: str) -> bool | None:
-    validation_text = _normalize_recipe_for_shell(command_text).replace("$$", "$")
+    validation_text = _normalize_recipe_for_shell(command_text).replace('$$', '$')
     try:
         result = subprocess.run(
-            ["bash", "-n"],
+            ['bash', '-n'],
             input=validation_text,
             text=True,
             capture_output=True,
@@ -476,10 +481,10 @@ def _shell_syntax_is_valid(command_text: str) -> bool | None:
 
 
 def _diagnostic_message(prefix: str, snippet: str) -> str:
-    compact_snippet = " ".join(snippet.split())
-    if compact_snippet == "":
+    compact_snippet = ' '.join(snippet.split())
+    if compact_snippet == '':
         return prefix
 
     if len(compact_snippet) > 40:
-        compact_snippet = compact_snippet[:37] + "..."
-    return f"{prefix}: `{compact_snippet}`"
+        compact_snippet = compact_snippet[:37] + '...'
+    return f'{prefix}: `{compact_snippet}`'

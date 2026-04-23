@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from lsprotocol import types as lsp
 
 from . import _analysis_recovery as recovery
-from .types import AnalyzedDoc, Span, SymOcc, TargetDef, VarDef
+from .types import Span
+
+if TYPE_CHECKING:
+    from .types import AnalyzedDoc, SymOcc, TargetDef, VarDef
 
 
 def def_for_pos(
@@ -15,7 +20,7 @@ def def_for_pos(
     if occurrence is None:
         return None
 
-    if occurrence.kind == "target":
+    if occurrence.kind == 'target':
         definitions = _definition_target_definitions(document, related_documents, occurrence.name)
         if not definitions:
             return None
@@ -52,9 +57,9 @@ def refs_for_pos(
     if occurrence is None:
         return None
 
-    if occurrence.kind == "target":
+    if occurrence.kind == 'target':
         definitions = _definition_target_definitions(document, related_documents, occurrence.name)
-        if occurrence.role == "reference" and not definitions:
+        if occurrence.role == 'reference' and not definitions:
             return []
 
         return _target_references(
@@ -63,7 +68,7 @@ def refs_for_pos(
             include_declaration=include_declaration,
         )
 
-    if occurrence.role == "reference" and (
+    if occurrence.role == 'reference' and (
         _strict_variable_definition_at_position(
             document,
             occurrence.name,
@@ -88,7 +93,7 @@ def prep_rename_for_pos(
     source_lines: tuple[str, ...],
 ) -> lsp.PrepareRenameResult | None:
     occurrence = document.occurrence_at(position.line, position.character)
-    if occurrence is None or occurrence.kind != "variable":
+    if occurrence is None or occurrence.kind != 'variable':
         return None
     if not _is_renameable_variable_occurrence(document, occurrence):
         return None
@@ -110,7 +115,7 @@ def rename_var_for_pos(
     source_lines: tuple[str, ...],
 ) -> lsp.WorkspaceEdit | None:
     occurrence = document.occurrence_at(position.line, position.character)
-    if occurrence is None or occurrence.kind != "variable":
+    if occurrence is None or occurrence.kind != 'variable':
         return None
     if not _is_renameable_variable_occurrence(document, occurrence):
         return None
@@ -126,7 +131,7 @@ def rename_var_for_pos(
         edited_spans.add(definition.name_span)
 
     for reference in document.occurrences:
-        if reference.kind != "variable" or reference.role != "reference":
+        if reference.kind != 'variable' or reference.role != 'reference':
             continue
         if reference.name != occurrence.name:
             continue
@@ -168,7 +173,7 @@ def pattern_target_definitions(
 ) -> tuple[TargetDef, ...]:
     definitions: list[TargetDef] = []
     for target_name, target_definitions in document.targets.items():
-        if "%" not in target_name or not _matches_target_name(name, target_name):
+        if '%' not in target_name or not _matches_target_name(name, target_name):
             continue
         definitions.extend(target_definitions)
     return tuple(definitions)
@@ -242,9 +247,9 @@ def _target_references(
     seen: set[tuple[str, Span]] = set()
     for source_document in documents:
         for occurrence in source_document.occurrences:
-            if occurrence.kind != "target" or occurrence.name != name:
+            if occurrence.kind != 'target' or occurrence.name != name:
                 continue
-            if not include_declaration and occurrence.role != "reference":
+            if not include_declaration and occurrence.role != 'reference':
                 continue
             _append_location(locations, seen, source_document.uri, occurrence.span)
 
@@ -268,7 +273,7 @@ def _variable_references(
     # Variable expansion is still modeled conservatively, so references follow
     # the same same-document, local-definition rules as rename.
     for occurrence in document.occurrences:
-        if occurrence.kind != "variable" or occurrence.role != "reference":
+        if occurrence.kind != 'variable' or occurrence.role != 'reference':
             continue
         if occurrence.name != name:
             continue
@@ -295,9 +300,9 @@ def _is_renameable_variable_occurrence(
     document: AnalyzedDoc,
     occurrence: SymOcc,
 ) -> bool:
-    if occurrence.kind != "variable":
+    if occurrence.kind != 'variable':
         return False
-    if occurrence.role == "definition":
+    if occurrence.role == 'definition':
         return occurrence.name in document.variables
 
     # Rename should only touch references that resolve to a local variable
@@ -317,9 +322,9 @@ def _variable_name_span_for_occurrence(
     occurrence: SymOcc,
     source_lines: tuple[str, ...],
 ) -> Span | None:
-    if occurrence.kind != "variable":
+    if occurrence.kind != 'variable':
         return None
-    if occurrence.role == "definition":
+    if occurrence.role == 'definition':
         return occurrence.span
     if occurrence.span.start_line >= len(source_lines):
         return None
@@ -327,12 +332,12 @@ def _variable_name_span_for_occurrence(
     line_text = source_lines[occurrence.span.start_line]
     occurrence_text = line_text[occurrence.span.start_character : occurrence.span.end_character]
     if (
-        occurrence_text.startswith("$(")
-        and occurrence_text.endswith(")")
+        occurrence_text.startswith('$(')
+        and occurrence_text.endswith(')')
         and len(occurrence_text) >= 3
     ) or (
-        occurrence_text.startswith("${")
-        and occurrence_text.endswith("}")
+        occurrence_text.startswith('${')
+        and occurrence_text.endswith('}')
         and len(occurrence_text) >= 3
     ):
         return Span(
@@ -359,10 +364,10 @@ def _append_location(
 
 
 def _matches_target_name(name: str, target_name: str) -> bool:
-    if "%" not in target_name:
+    if '%' not in target_name:
         return name == target_name
 
-    prefix, _, suffix = target_name.partition("%")
+    prefix, _, suffix = target_name.partition('%')
     return (
         name.startswith(prefix) and name.endswith(suffix) and len(name) > len(prefix) + len(suffix)
     )

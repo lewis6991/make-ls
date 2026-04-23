@@ -2,37 +2,44 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast, final
 
 from lsprotocol import types as lsp
 from pygls.lsp.client import LanguageClient
-from pygls.protocol import JsonRPCProtocol
-from pygls.protocol.json_rpc import RPCMessage
 
-from make_ls.server import MakeLsLanguageServer, create_server
+from make_ls.server import create_server
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from pygls.protocol import JsonRPCProtocol
+    from pygls.protocol.json_rpc import RPCMessage
+
+    from make_ls.server import MakeLsLanguageServer
 
 
+@final
 class InMemoryWriter:
     def __init__(self, peer: JsonRPCProtocol, loop: asyncio.AbstractEventLoop) -> None:
-        self._peer = peer
-        self._loop = loop
+        self._peer: JsonRPCProtocol = peer
+        self._loop: asyncio.AbstractEventLoop = loop
 
     def write(self, data: bytes) -> None:
-        payload = cast("dict[str, object]", json.loads(data.decode("utf-8")))
-        message = cast("RPCMessage", self._peer.structure_message(payload))
+        payload = cast('dict[str, object]', json.loads(data.decode('utf-8')))
+        message = cast('RPCMessage', self._peer.structure_message(payload))
         _ = self._loop.call_soon(self._peer.handle_message, message)
 
     def close(self) -> None:
         return None
 
 
+@final
 class LspSession:
     def __init__(self, root: Path, *, snippet_edit_support: bool = True) -> None:
-        self.root = root
-        self.snippet_edit_support = snippet_edit_support
+        self.root: Path = root
+        self.snippet_edit_support: bool = snippet_edit_support
         self.server: MakeLsLanguageServer = create_server()
-        self.client = LanguageClient("make-ls-tests", "0.1.0")
+        self.client: LanguageClient = LanguageClient('make-ls-tests', '0.1.0')
         self.diagnostics: asyncio.Queue[lsp.PublishDiagnosticsParams] = asyncio.Queue()
         self.initialize_result: lsp.InitializeResult | None = None
         self._versions: dict[str, int] = {}
@@ -72,7 +79,7 @@ class LspSession:
                     ),
                     text_document=lsp.TextDocumentClientCapabilities(
                         rename=lsp.RenameClientCapabilities(prepare_support=True)
-                    )
+                    ),
                 ),
                 workspace_folders=[],
             )
@@ -86,7 +93,7 @@ class LspSession:
 
     async def open_document(self, relative_path: str, text: str) -> str:
         path = self.root / relative_path
-        _ = path.write_text(text, encoding="utf-8")
+        _ = path.write_text(text, encoding='utf-8')
         uri = path.as_uri()
         self._versions[uri] = 1
 
@@ -94,7 +101,7 @@ class LspSession:
             lsp.DidOpenTextDocumentParams(
                 text_document=lsp.TextDocumentItem(
                     uri=uri,
-                    language_id="make",
+                    language_id='make',
                     version=1,
                     text=text,
                 )
@@ -128,13 +135,13 @@ class LspSession:
     async def code_actions(
         self,
         uri: str,
-        range: lsp.Range,
+        target_range: lsp.Range,
         diagnostics: list[lsp.Diagnostic],
     ) -> list[lsp.CodeAction | lsp.Command]:
         result = await self.client.text_document_code_action_async(
             lsp.CodeActionParams(
                 text_document=lsp.TextDocumentIdentifier(uri=uri),
-                range=range,
+                range=target_range,
                 context=lsp.CodeActionContext(
                     diagnostics=diagnostics,
                     only=[lsp.CodeActionKind.QuickFix],

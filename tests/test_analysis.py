@@ -6,89 +6,89 @@ from make_ls.types import VarGuard
 
 def test_analyze_document_recovers_contextual_symbol_sites() -> None:
     document = analyze_document(
-        "file:///Makefile",
+        'file:///Makefile',
         None,
-        "ifneq ($(FEATURE),)\nRESULT := $(FEATURE)\nendif\n",
+        'ifneq ($(FEATURE),)\nRESULT := $(FEATURE)\nendif\n',
     )
 
-    assert [form.kind for form in document.forms] == ["conditional", "assignment"]
+    assert [form.kind for form in document.forms] == ['conditional', 'assignment']
 
     test_occurrence = next(
         occurrence
         for occurrence in document.occurrences
-        if occurrence.span.start_line == 0 and occurrence.name == "FEATURE"
+        if occurrence.span.start_line == 0 and occurrence.name == 'FEATURE'
     )
     assert test_occurrence.context is not None
-    assert test_occurrence.context.form_kind == "conditional"
-    assert test_occurrence.context.kind == "conditional_test"
+    assert test_occurrence.context.form_kind == 'conditional'
+    assert test_occurrence.context.kind == 'conditional_test'
 
     guarded_occurrence = next(
         occurrence
         for occurrence in document.occurrences
         if occurrence.span.start_line == 1
-        and occurrence.role == "reference"
-        and occurrence.name == "FEATURE"
+        and occurrence.role == 'reference'
+        and occurrence.name == 'FEATURE'
     )
     assert guarded_occurrence.context is not None
-    assert guarded_occurrence.context.form_kind == "assignment"
-    assert guarded_occurrence.context.kind == "assignment_value"
-    assert guarded_occurrence.context.active_guards == (VarGuard("FEATURE", "nonempty"),)
+    assert guarded_occurrence.context.form_kind == 'assignment'
+    assert guarded_occurrence.context.kind == 'assignment_value'
+    assert guarded_occurrence.context.active_guards == (VarGuard('FEATURE', 'nonempty'),)
 
 
 def test_analyze_document_recovers_grouped_targets_without_ampersand_target() -> None:
     document = analyze_document(
-        "file:///Makefile",
+        'file:///Makefile',
         None,
-        "out1 out2 &: dep\n\t@echo hi\n\ndep:\n\t@echo dep\n",
+        'out1 out2 &: dep\n\t@echo hi\n\ndep:\n\t@echo dep\n',
     )
 
-    assert set(document.targets) == {"dep", "out1", "out2"}
-    assert "&" not in document.targets
-    assert document.targets["out1"][0].prerequisites == ("dep",)
-    assert document.targets["out2"][0].prerequisites == ("dep",)
+    assert set(document.targets) == {'dep', 'out1', 'out2'}
+    assert '&' not in document.targets
+    assert document.targets['out1'][0].prerequisites == ('dep',)
+    assert document.targets['out2'][0].prerequisites == ('dep',)
     assert document.diagnostics == ()
 
 
 def test_analyze_document_recovers_grouped_targets_with_late_separator() -> None:
     document = analyze_document(
-        "file:///Makefile",
+        'file:///Makefile',
         None,
         (
-            "out1 \\\n"
-            "  out2 &: dep \\\n"
-            "  extra\n"
-            "\t@echo hi\n"
-            "\n"
-            "dep:\n"
-            "\t@echo dep\n"
-            "extra:\n"
-            "\t@echo extra\n"
+            'out1 \\\n'
+            '  out2 &: dep \\\n'
+            '  extra\n'
+            '\t@echo hi\n'
+            '\n'
+            'dep:\n'
+            '\t@echo dep\n'
+            'extra:\n'
+            '\t@echo extra\n'
         ),
     )
 
-    assert set(document.targets) == {"dep", "extra", "out1", "out2"}
-    assert document.targets["out1"][0].prerequisites == ("dep", "extra")
-    assert document.targets["out1"][0].name_span.start_line == 0
-    assert document.targets["out2"][0].prerequisites == ("dep", "extra")
-    assert document.targets["out2"][0].name_span.start_line == 1
+    assert set(document.targets) == {'dep', 'extra', 'out1', 'out2'}
+    assert document.targets['out1'][0].prerequisites == ('dep', 'extra')
+    assert document.targets['out1'][0].name_span.start_line == 0
+    assert document.targets['out2'][0].prerequisites == ('dep', 'extra')
+    assert document.targets['out2'][0].name_span.start_line == 1
     assert document.diagnostics == ()
 
 
 def test_analyze_document_allows_direct_recipe_local_eval_variables() -> None:
     document = analyze_document(
-        "file:///Makefile",
+        'file:///Makefile',
         None,
         (
-            ".venv_%:\n"
-            "\t$(eval OS=$(word 1,$(subst _, ,$*)))\n"
-            "\t$(eval ARCH=$(word 2,$(subst _, ,$*)))\n"
+            '.venv_%:\n'
+            '\t$(eval OS=$(word 1,$(subst _, ,$*)))\n'
+            '\t$(eval ARCH=$(word 2,$(subst _, ,$*)))\n'
             "\tprintf '%s %s\\n' $(OS) $(ARCH)\n"
-            "\n"
-            "other:\n"
+            '\n'
+            'other:\n'
             "\tprintf '%s\\n' $(OS)\n"
         ),
     )
 
     assert len(document.diagnostics) == 1
-    assert document.diagnostics[0].message == "Unknown variable reference: `$(OS)`"
+    assert document.diagnostics[0].message == 'Unknown variable reference: `$(OS)`'
     assert document.diagnostics[0].range.start.line == 6

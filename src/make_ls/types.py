@@ -5,18 +5,18 @@ from typing import Literal
 
 from lsprotocol import types as lsp
 
-FormKind = Literal["assignment", "conditional", "rule"]
-SymKind = Literal["target", "variable"]
-SymRole = Literal["definition", "reference"]
+FormKind = Literal['assignment', 'conditional', 'rule']
+SymKind = Literal['target', 'variable']
+SymRole = Literal['definition', 'reference']
 SymCtxKind = Literal[
-    "assignment_definition",
-    "assignment_value",
-    "conditional_test",
-    "prerequisite",
-    "recipe",
-    "target_definition",
+    'assignment_definition',
+    'assignment_value',
+    'conditional_test',
+    'prerequisite',
+    'recipe',
+    'target_definition',
 ]
-VarGuardKind = Literal["defined", "empty", "nonempty", "undefined"]
+VarGuardKind = Literal['defined', 'empty', 'nonempty', 'undefined']
 
 
 @dataclass(frozen=True, slots=True)

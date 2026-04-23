@@ -1,7 +1,5 @@
 """make_ls package."""
 
-__version__ = "0.3.0"
+from ._version import __version__
 
-from .server import MakeLsLanguageServer, create_server
-
-__all__ = ["MakeLsLanguageServer", "__version__", "create_server"]
+__all__ = ['__version__']
