@@ -249,6 +249,28 @@ def test_check_reports_unresolved_prerequisite_warning(
     )
 
 
+def test_check_reports_missing_endif_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _ = (tmp_path / 'Makefile').write_text(
+        'ifeq ($(MODE),test)\nall:\n\t@echo done\n',
+        encoding='utf-8',
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(['check', 'Makefile']) == 1
+
+    captured = capsys.readouterr()
+    assert captured.err == ''
+    assert captured.out == (
+        'Makefile:1:1: error: Missing endif for conditional block\n'
+        '1 | ifeq ($(MODE),test)\n'
+        '  | ^^^^^^^^^^^^^^^^^^^\n'
+    )
+
+
 def test_check_uses_color_for_tty_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

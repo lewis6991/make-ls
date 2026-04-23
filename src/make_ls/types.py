@@ -46,6 +46,7 @@ class TargetDef:
     prerequisites: tuple[str, ...]
     rule_text: str
     recipe_text: str | None
+    is_double_colon: bool = False
 
 
 @dataclass(frozen=True, slots=True)

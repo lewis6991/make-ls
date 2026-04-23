@@ -32,6 +32,7 @@ VARIABLE_REFERENCE_RE = re.compile(
     r'\$\((?P<paren>[A-Za-z0-9_.%/@<?^+*|!-]+)\)'
     r'|\$\{(?P<brace>[A-Za-z0-9_.%/@<?^+*|!-]+)\}'
 )
+SIMPLE_AUTOMATIC_VARIABLE_RE = re.compile(r'\$(?P<simple>[@%<?^+*|])')
 RECIPE_LOCAL_EVAL_RE = re.compile(r'^\$\(\s*eval\s+(?P<assignment>.+)\)\s*$')
 VARIABLE_REFERENCE_DELIMITERS = {'(': ')', '{': '}'}
 CONDITIONAL_DIRECTIVES = frozenset({'ifdef', 'ifeq', 'ifndef', 'ifneq'})
@@ -60,6 +61,7 @@ class RecoveredInclude:
 @dataclass(frozen=True, slots=True)
 class IncludeRecovery:
     includes: tuple[RecoveredInclude, ...]
+    occurrences: tuple[SymOcc, ...]
     parsed_lines: frozenset[int]
 
 
@@ -254,6 +256,7 @@ def recover_rules(
 
 def recover_include_directives(source_lines: list[str]) -> IncludeRecovery:
     includes: list[RecoveredInclude] = []
+    occurrences: list[SymOcc] = []
     parsed_lines: set[int] = set()
     in_define_block = False
     line_number = 0
@@ -286,11 +289,20 @@ def recover_include_directives(source_lines: list[str]) -> IncludeRecovery:
             continue
 
         includes.extend(recovered_includes)
+        for include in recovered_includes:
+            occurrences.extend(
+                _recover_variable_references_from_text(
+                    include.path,
+                    include.span.start_line,
+                    include.span.start_character,
+                )
+            )
         parsed_lines.update(range(line_number, logical_end_line + 1))
         line_number = logical_end_line + 1
 
     return IncludeRecovery(
         includes=tuple(includes),
+        occurrences=tuple(occurrences),
         parsed_lines=frozenset(parsed_lines),
     )
 
@@ -577,7 +589,12 @@ def _recover_rule(
 
     if not _can_start_rule(header_lines[0]):
         return None
-    separator_line_index, separator_start, separator_width = _recover_rule_separator(header_lines)
+    (
+        separator_line_index,
+        separator_start,
+        separator_width,
+        is_double_colon,
+    ) = _recover_rule_separator(header_lines)
     if separator_line_index is None:
         return None
 
@@ -647,6 +664,7 @@ def _recover_rule(
                 prerequisites=prerequisites,
                 rule_text=rule_text,
                 recipe_text=recipe_text,
+                is_double_colon=is_double_colon,
             )
             target_definitions.append(definition)
             occurrences.append(
@@ -699,30 +717,31 @@ def _can_start_rule(line: str) -> bool:
     return ASSIGNMENT_RE.match(line) is None
 
 
-def _recover_rule_separator(header_lines: list[str]) -> tuple[int | None, int, int]:
+def _recover_rule_separator(header_lines: list[str]) -> tuple[int | None, int, int, bool]:
     for line_index, line in enumerate(header_lines):
-        separator_start, separator_width = _recover_rule_separator_in_line(line)
+        separator_start, separator_width, is_double_colon = _recover_rule_separator_in_line(line)
         if separator_start is not None:
-            return line_index, separator_start, separator_width
-    return None, 0, 0
+            return line_index, separator_start, separator_width, is_double_colon
+    return None, 0, 0, False
 
 
-def _recover_rule_separator_in_line(line: str) -> tuple[int | None, int]:
+def _recover_rule_separator_in_line(line: str) -> tuple[int | None, int, bool]:
     separator_index = line.find(':')
     if separator_index == -1:
-        return None, 0
+        return None, 0, False
     if separator_index + 1 < len(line) and line[separator_index + 1] == '=':
-        return None, 0
+        return None, 0, False
     if separator_index > 0 and line[separator_index - 1] in '?+!':
-        return None, 0
+        return None, 0, False
 
     separator_start = separator_index
-    separator_width = 2 if line[separator_index : separator_index + 2] == '::' else 1
+    is_double_colon = line[separator_index : separator_index + 2] == '::'
+    separator_width = 2 if is_double_colon else 1
     if separator_index > 0 and line[separator_index - 1] == '&':
         separator_start -= 1
         separator_width += 1
 
-    return separator_start, separator_width
+    return separator_start, separator_width, is_double_colon
 
 
 def _recover_prerequisites(
@@ -842,6 +861,25 @@ def _recover_variable_references_from_text(
                 context=context,
             )
         )
+    for reference in SIMPLE_AUTOMATIC_VARIABLE_RE.finditer(text):
+        if reference.start() > 0 and text[reference.start() - 1] == '$':
+            continue
+
+        occurrences.append(
+            SymOcc(
+                kind='variable',
+                role='reference',
+                name=reference.group('simple'),
+                span=Span(
+                    line_number,
+                    start_character + reference.start(),
+                    line_number,
+                    start_character + reference.end(),
+                ),
+                context=context,
+            )
+        )
+    occurrences.sort(key=lambda occurrence: occurrence.span.start_character)
     return occurrences
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -16,7 +17,7 @@ from .types import Span
 if TYPE_CHECKING:
     from collections import defaultdict
 
-    from .types import RecipeLine, SymCtx, SymOcc, VarDef
+    from .types import RecipeLine, SymCtx, SymOcc, TargetDef, VarDef
 
 MAKE_AUTOMATIC_VARIABLE_RE = re.compile(
     r'\$\(([@%<?^+*|][DF]?)\)|\$\{([@%<?^+*|][DF]?)\}|\$([@%<?^+*|])'
@@ -24,6 +25,21 @@ MAKE_AUTOMATIC_VARIABLE_RE = re.compile(
 UNKNOWN_VARIABLE_DIAGNOSTIC_CODE = 'unknown-variable'
 UNRESOLVED_INCLUDE_DIAGNOSTIC_CODE = 'unresolved-include'
 UNRESOLVED_PREREQUISITE_DIAGNOSTIC_CODE = 'unresolved-prerequisite'
+AUTOMATIC_VARIABLE_OUTSIDE_RECIPE_DIAGNOSTIC_CODE = 'automatic-variable-outside-recipe'
+OVERRIDING_RECIPE_DIAGNOSTIC_CODE = 'overriding-recipe'
+CIRCULAR_PREREQUISITE_DIAGNOSTIC_CODE = 'circular-prerequisite'
+UNEXPECTED_ELSE_DIAGNOSTIC_CODE = 'unexpected-else'
+DUPLICATE_ELSE_DIAGNOSTIC_CODE = 'duplicate-else'
+UNEXPECTED_ENDIF_DIAGNOSTIC_CODE = 'unexpected-endif'
+UNEXPECTED_ENDEF_DIAGNOSTIC_CODE = 'unexpected-endef'
+MISSING_ENDIF_DIAGNOSTIC_CODE = 'missing-endif'
+MISSING_ENDEF_DIAGNOSTIC_CODE = 'missing-endef'
+
+
+@dataclass(slots=True)
+class _ConditionalControlFrame:
+    start_line: int
+    saw_terminal_else: bool = False
 
 
 def collect_shell_diagnostics(recipe_lines: tuple[RecipeLine, ...]) -> list[lsp.Diagnostic]:
@@ -103,6 +119,118 @@ def collect_make_syntax_diagnostics(
     return diagnostics
 
 
+def collect_control_block_diagnostics(source_lines: list[str]) -> list[lsp.Diagnostic]:
+    diagnostics: list[lsp.Diagnostic] = []
+    conditional_stack: list[_ConditionalControlFrame] = []
+    define_start_line: int | None = None
+    line_number = 0
+
+    while line_number < len(source_lines):
+        line = source_lines[line_number]
+        stripped = line.strip()
+
+        if define_start_line is not None:
+            if stripped == 'endef':
+                define_start_line = None
+            line_number += 1
+            continue
+
+        if stripped == '' or stripped.startswith('#'):
+            line_number += 1
+            continue
+
+        if recovery.starts_define_block(stripped):
+            define_start_line = line_number
+            line_number += 1
+            continue
+
+        if line.startswith('\t') or recovery.continues_previous_top_level_line(
+            source_lines,
+            line_number,
+        ):
+            line_number += 1
+            continue
+
+        logical_end_line = recovery.logical_top_level_end(source_lines, line_number)
+        logical_text = _logical_top_level_text(source_lines, line_number, logical_end_line)
+        first_token, _separator, remainder = logical_text.partition(' ')
+
+        if first_token in recovery.CONDITIONAL_DIRECTIVES:
+            conditional_stack.append(_ConditionalControlFrame(start_line=line_number))
+        elif first_token == 'else':
+            if not conditional_stack:
+                diagnostics.append(
+                    _block_diagnostic(
+                        source_lines,
+                        line_number,
+                        logical_end_line,
+                        message='Unexpected else directive',
+                        code=UNEXPECTED_ELSE_DIAGNOSTIC_CODE,
+                    )
+                )
+            elif conditional_stack[-1].saw_terminal_else:
+                diagnostics.append(
+                    _block_diagnostic(
+                        source_lines,
+                        line_number,
+                        logical_end_line,
+                        message='Duplicate else directive',
+                        code=DUPLICATE_ELSE_DIAGNOSTIC_CODE,
+                    )
+                )
+            elif not _is_else_if_branch(remainder):
+                conditional_stack[-1].saw_terminal_else = True
+        elif first_token == 'endif':
+            if not conditional_stack:
+                diagnostics.append(
+                    _block_diagnostic(
+                        source_lines,
+                        line_number,
+                        logical_end_line,
+                        message='Unexpected endif directive',
+                        code=UNEXPECTED_ENDIF_DIAGNOSTIC_CODE,
+                    )
+                )
+            else:
+                _ = conditional_stack.pop()
+        elif first_token == 'endef':
+            diagnostics.append(
+                _block_diagnostic(
+                    source_lines,
+                    line_number,
+                    logical_end_line,
+                    message='Unexpected endef directive',
+                    code=UNEXPECTED_ENDEF_DIAGNOSTIC_CODE,
+                )
+            )
+
+        line_number = logical_end_line + 1
+
+    if define_start_line is not None:
+        diagnostics.append(
+            _block_diagnostic(
+                source_lines,
+                define_start_line,
+                define_start_line,
+                message='Missing endef for define block',
+                code=MISSING_ENDEF_DIAGNOSTIC_CODE,
+            )
+        )
+
+    diagnostics.extend(
+        _block_diagnostic(
+            source_lines,
+            frame.start_line,
+            frame.start_line,
+            message='Missing endif for conditional block',
+            code=MISSING_ENDIF_DIAGNOSTIC_CODE,
+        )
+        for frame in reversed(conditional_stack)
+    )
+
+    return diagnostics
+
+
 def collect_unknown_variable_diagnostics(
     source: str,
     variable_map: dict[str, list[VarDef]] | defaultdict[str, list[VarDef]],
@@ -135,6 +263,34 @@ def collect_unknown_variable_diagnostics(
                 range=occurrence.span.to_lsp_range(),
                 message=_diagnostic_message('Unknown variable reference', occurrence_text),
                 code=UNKNOWN_VARIABLE_DIAGNOSTIC_CODE,
+                severity=lsp.DiagnosticSeverity.Warning,
+                source='make-ls',
+            )
+        )
+    return diagnostics
+
+
+def collect_automatic_variable_diagnostics(
+    source: str,
+    occurrences: list[SymOcc],
+) -> list[lsp.Diagnostic]:
+    diagnostics: list[lsp.Diagnostic] = []
+    for occurrence in occurrences:
+        if occurrence.kind != 'variable' or occurrence.role != 'reference':
+            continue
+        if not _is_make_automatic_variable_name(occurrence.name):
+            continue
+        if not _should_warn_for_automatic_variable(occurrence.context):
+            continue
+
+        diagnostics.append(
+            lsp.Diagnostic(
+                range=occurrence.span.to_lsp_range(),
+                message=_diagnostic_message(
+                    'Automatic variable outside recipe context',
+                    recovery.slice_text_span(source, occurrence.span),
+                ),
+                code=AUTOMATIC_VARIABLE_OUTSIDE_RECIPE_DIAGNOSTIC_CODE,
                 severity=lsp.DiagnosticSeverity.Warning,
                 source='make-ls',
             )
@@ -230,6 +386,67 @@ def collect_unresolved_prerequisite_diagnostics(
     return diagnostics
 
 
+def collect_overriding_recipe_diagnostics(
+    target_map: dict[str, list[TargetDef]] | defaultdict[str, list[TargetDef]],
+) -> list[lsp.Diagnostic]:
+    diagnostics: list[lsp.Diagnostic] = []
+    for name, definitions in target_map.items():
+        if any(definition.is_double_colon for definition in definitions):
+            continue
+
+        recipe_definitions = [definition for definition in definitions if definition.recipe_text]
+        diagnostics.extend(
+            lsp.Diagnostic(
+                range=definition.name_span.to_lsp_range(),
+                message=_diagnostic_message('Overriding recipe for target', name),
+                code=OVERRIDING_RECIPE_DIAGNOSTIC_CODE,
+                severity=lsp.DiagnosticSeverity.Warning,
+                source='make-ls',
+            )
+            for definition in recipe_definitions[1:]
+        )
+
+    return diagnostics
+
+
+def collect_circular_prerequisite_diagnostics(
+    target_map: dict[str, list[TargetDef]] | defaultdict[str, list[TargetDef]],
+) -> list[lsp.Diagnostic]:
+    graph = _target_dependency_graph(target_map)
+    reverse_graph = _reverse_target_dependency_graph(graph)
+    diagnostics: list[lsp.Diagnostic] = []
+    seen_components: set[frozenset[str]] = set()
+
+    for name in graph:
+        component = frozenset(
+            _reachable_targets(graph, name) & _reachable_targets(reverse_graph, name)
+        )
+        if component in seen_components:
+            continue
+        seen_components.add(component)
+
+        if len(component) == 1 and name not in graph[name]:
+            continue
+
+        anchor = min(component)
+        message = (
+            _diagnostic_message('Circular prerequisite', anchor)
+            if len(component) == 1
+            else _diagnostic_message('Circular prerequisite cycle', ', '.join(sorted(component)))
+        )
+        diagnostics.append(
+            lsp.Diagnostic(
+                range=target_map[anchor][0].name_span.to_lsp_range(),
+                message=message,
+                code=CIRCULAR_PREREQUISITE_DIAGNOSTIC_CODE,
+                severity=lsp.DiagnosticSeverity.Warning,
+                source='make-ls',
+            )
+        )
+
+    return diagnostics
+
+
 def _make_syntax_diagnostic(
     source_lines: list[str],
     start_line: int,
@@ -247,6 +464,23 @@ def _make_syntax_diagnostic(
                 end_character=len(source_lines[end_line]),
             ),
         ),
+        severity=lsp.DiagnosticSeverity.Error,
+        source='make-ls',
+    )
+
+
+def _block_diagnostic(
+    source_lines: list[str],
+    start_line: int,
+    end_line: int,
+    *,
+    message: str,
+    code: str,
+) -> lsp.Diagnostic:
+    return lsp.Diagnostic(
+        range=Span(start_line, 0, end_line, len(source_lines[end_line])).to_lsp_range(),
+        message=message,
+        code=code,
         severity=lsp.DiagnosticSeverity.Error,
         source='make-ls',
     )
@@ -373,6 +607,40 @@ def _is_tolerated_top_level_line(stripped_line: str) -> bool:
     return first_token in recovery.RULE_DIRECTIVES
 
 
+def _logical_top_level_text(
+    source_lines: list[str],
+    start_line: int,
+    end_line: int,
+) -> str:
+    parts: list[str] = []
+    for line_number in range(start_line, end_line + 1):
+        text = _strip_make_comment(source_lines[line_number]).strip()
+        if line_number < end_line and recovery.has_unescaped_line_continuation(text):
+            text = text[:-1].rstrip()
+        if text != '':
+            parts.append(text)
+    return ' '.join(parts)
+
+
+def _strip_make_comment(text: str) -> str:
+    escaped = False
+    for index, character in enumerate(text):
+        if escaped:
+            escaped = False
+            continue
+        if character == '\\':
+            escaped = True
+            continue
+        if character == '#':
+            return text[:index]
+    return text
+
+
+def _is_else_if_branch(remainder: str) -> bool:
+    next_token = remainder.strip().split(maxsplit=1)
+    return bool(next_token) and next_token[0] in recovery.CONDITIONAL_DIRECTIVES
+
+
 def _recipe_local_eval_assignment_name(command_text: str) -> str | None:
     match = recovery.RECIPE_LOCAL_EVAL_RE.match(command_text.strip())
     if match is None:
@@ -433,6 +701,16 @@ def _should_warn_for_unknown_variable(
     return name not in os.environ
 
 
+def _should_warn_for_automatic_variable(context: SymCtx | None) -> bool:
+    if context is None:
+        return True
+    if context.kind == 'recipe':
+        return False
+    # `.SECONDEXPANSION` can make automatic variables valid in prerequisites,
+    # so keep this warning focused on contexts that are reliably suspicious.
+    return context.kind != 'prerequisite'
+
+
 def _is_make_automatic_variable_name(name: str) -> bool:
     if name == '':
         return False
@@ -457,6 +735,50 @@ def _logical_recipe_lines(recipe_lines: tuple[RecipeLine, ...]) -> list[list[Rec
         groups.append(current_group)
 
     return groups
+
+
+def _target_dependency_graph(
+    target_map: dict[str, list[TargetDef]] | defaultdict[str, list[TargetDef]],
+) -> dict[str, tuple[str, ...]]:
+    target_names = set(target_map)
+    graph: dict[str, tuple[str, ...]] = {}
+    for name, definitions in target_map.items():
+        prerequisites: list[str] = []
+        seen: set[str] = set()
+        for definition in definitions:
+            for prerequisite in definition.prerequisites:
+                if prerequisite not in target_names or prerequisite in seen:
+                    continue
+                seen.add(prerequisite)
+                prerequisites.append(prerequisite)
+        graph[name] = tuple(prerequisites)
+    return graph
+
+
+def _reverse_target_dependency_graph(
+    graph: dict[str, tuple[str, ...]],
+) -> dict[str, tuple[str, ...]]:
+    reversed_edges: dict[str, list[str]] = {name: [] for name in graph}
+    for source, prerequisites in graph.items():
+        for prerequisite in prerequisites:
+            reversed_edges[prerequisite].append(source)
+    return {name: tuple(prerequisites) for name, prerequisites in reversed_edges.items()}
+
+
+def _reachable_targets(
+    graph: dict[str, tuple[str, ...]],
+    start: str,
+) -> set[str]:
+    seen = {start}
+    pending = [start]
+    while pending:
+        current = pending.pop()
+        for neighbor in graph.get(current, ()):
+            if neighbor in seen:
+                continue
+            seen.add(neighbor)
+            pending.append(neighbor)
+    return seen
 
 
 def _normalize_recipe_for_shell(command_text: str) -> str:

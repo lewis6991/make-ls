@@ -7,7 +7,11 @@ from ._analysis_diagnostics import (
     UNKNOWN_VARIABLE_DIAGNOSTIC_CODE,
     UNRESOLVED_INCLUDE_DIAGNOSTIC_CODE,
     UNRESOLVED_PREREQUISITE_DIAGNOSTIC_CODE,
+    collect_automatic_variable_diagnostics,
+    collect_circular_prerequisite_diagnostics,
+    collect_control_block_diagnostics,
     collect_make_syntax_diagnostics,
+    collect_overriding_recipe_diagnostics,
     collect_shell_diagnostics,
     collect_unknown_variable_diagnostics,
     collect_unresolved_include_diagnostics,
@@ -75,12 +79,14 @@ def analyze_document(
 
     phony_targets.update(declared_phony_targets(rule_recovery.definitions))
     _record_occs(occurrences, conditional_recovery.occurrences)
+    _record_occs(occurrences, include_recovery.occurrences)
     _record_occs(occurrences, rule_recovery.occurrences)
     _record_occs(occurrences, assignment_recovery.occurrences)
 
     target_names = set(target_map)
     include_patterns = tuple(include.path for include in include_recovery.includes)
 
+    control_block_diagnostics = collect_control_block_diagnostics(source_lines)
     make_diagnostics = collect_make_syntax_diagnostics(
         source_lines,
         parsed_lines=(
@@ -95,6 +101,7 @@ def analyze_document(
         occurrences,
         rule_recovery.recipe_lines,
     )
+    automatic_variable_diagnostics = collect_automatic_variable_diagnostics(source, occurrences)
     unresolved_include_diagnostics = collect_unresolved_include_diagnostics(
         uri,
         include_recovery.includes,
@@ -107,6 +114,8 @@ def analyze_document(
         phony_targets,
         include_patterns,
     )
+    overriding_recipe_diagnostics = collect_overriding_recipe_diagnostics(target_map)
+    circular_prerequisite_diagnostics = collect_circular_prerequisite_diagnostics(target_map)
     shell_diagnostics = (
         collect_shell_diagnostics(rule_recovery.recipe_lines) if include_shell_diagnostics else []
     )
@@ -125,11 +134,15 @@ def analyze_document(
             *assignment_recovery.forms,
         ),
         diagnostics=(
+            *control_block_diagnostics,
             *make_diagnostics,
             *assignment_recovery.diagnostics,
             *unknown_variable_diagnostics,
+            *automatic_variable_diagnostics,
             *unresolved_include_diagnostics,
             *unresolved_prerequisite_diagnostics,
+            *overriding_recipe_diagnostics,
+            *circular_prerequisite_diagnostics,
             *shell_diagnostics,
         ),
     )
