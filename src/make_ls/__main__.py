@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import logging
 import os
 import sys
@@ -21,10 +22,19 @@ LOG_LEVELS = {
     "warning": logging.WARNING,
     "error": logging.ERROR,
 }
+CHECK_CONTEXT_TAB_WIDTH = 4
+ANSI_RESET = "\x1b[0m"
+ANSI_BOLD = "\x1b[1m"
+ANSI_DIM = "\x1b[2m"
+ANSI_RED = "\x1b[31m"
+ANSI_YELLOW = "\x1b[33m"
+ANSI_BLUE = "\x1b[34m"
+ANSI_CYAN = "\x1b[36m"
 
 
 class MakeLsArgs(argparse.Namespace):
     command: str | None
+    check_format: str | None
     log_file: str | None
     log_level: str
     no_log_file: bool
@@ -49,7 +59,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     if args.command == "check":
-        return _run_check(args.paths, stdout=sys.stdout, stderr=sys.stderr)
+        return _run_check(
+            args.paths,
+            stdout=sys.stdout,
+            stderr=sys.stderr,
+            output_format=args.check_format or "text",
+        )
 
     logging.getLogger("make_ls").info("starting stdio server")
     create_server().start_io()
@@ -89,6 +104,13 @@ def _argument_parser() -> argparse.ArgumentParser:
         nargs="*",
         help="Files or directories to check. Defaults to the current directory.",
     )
+    _ = check_parser.add_argument(
+        "--format",
+        dest="check_format",
+        choices=("text", "json"),
+        default="text",
+        help="Check output format.",
+    )
     return parser
 
 
@@ -97,6 +119,7 @@ def _run_check(
     *,
     stdout: TextIO,
     stderr: TextIO,
+    output_format: str,
 ) -> int:
     files = _check_files(raw_paths, stderr=stderr)
     if files is None:
@@ -105,6 +128,7 @@ def _run_check(
         print("make-ls: no Makefiles found", file=stderr)
         return 2
 
+    analyzed_files: list[tuple[Path, list[str], tuple[lsp.Diagnostic, ...]]] = []
     diagnostics_found = False
     for path in files:
         try:
@@ -113,10 +137,28 @@ def _run_check(
             print(f"make-ls: failed to read {path}: {error}", file=stderr)
             return 2
 
+        source_lines = source.splitlines()
         analyzed = analyze_document(path.resolve().as_uri(), None, source)
-        for diagnostic in analyzed.diagnostics:
+        analyzed_files.append((path, source_lines, analyzed.diagnostics))
+        if analyzed.diagnostics:
             diagnostics_found = True
-            print(_format_diagnostic(path, diagnostic), file=stdout)
+
+    if output_format == "json":
+        json.dump(_sarif_log(analyzed_files), stdout, indent=2)
+        print(file=stdout)
+        return 1 if diagnostics_found else 0
+
+    rendered_diagnostic = False
+    use_color = _check_uses_color(stdout)
+    for path, source_lines, diagnostics in analyzed_files:
+        for diagnostic in diagnostics:
+            if rendered_diagnostic:
+                print(file=stdout)
+            print(
+                _format_diagnostic(path, diagnostic, source_lines=source_lines, color=use_color),
+                file=stdout,
+            )
+            rendered_diagnostic = True
 
     return 1 if diagnostics_found else 0
 
@@ -173,11 +215,26 @@ def _append_unique_path(files: list[Path], seen: set[Path], path: Path) -> None:
     seen.add(resolved_path)
 
 
-def _format_diagnostic(path: Path, diagnostic: lsp.Diagnostic) -> str:
+def _format_diagnostic(
+    path: Path,
+    diagnostic: lsp.Diagnostic,
+    *,
+    source_lines: list[str],
+    color: bool,
+) -> str:
     start = diagnostic.range.start
     severity = _diagnostic_severity_name(diagnostic.severity)
     message = " ".join(diagnostic.message.splitlines())
-    return f"{_display_path(path)}:{start.line + 1}:{start.character + 1}: {severity}: {message}"
+    location = f"{_display_path(path)}:{start.line + 1}:{start.character + 1}"
+    header = (
+        f"{_styled(location, ANSI_BOLD, enabled=color)}: "
+        f"{_styled(severity, _severity_ansi_code(severity), enabled=color)}: "
+        f"{message}"
+    )
+    context = _format_diagnostic_context(source_lines, diagnostic, severity=severity, color=color)
+    if context is None:
+        return header
+    return f"{header}\n{context}"
 
 
 def _display_path(path: Path) -> str:
@@ -199,6 +256,174 @@ def _diagnostic_severity_name(severity: lsp.DiagnosticSeverity | int | None) -> 
     if severity == lsp.DiagnosticSeverity.Hint:
         return "hint"
     return "diagnostic"
+
+
+def _sarif_log(
+    analyzed_files: list[tuple[Path, list[str], tuple[lsp.Diagnostic, ...]]],
+) -> dict[str, object]:
+    rules: dict[str, dict[str, object]] = {}
+    results: list[dict[str, object]] = []
+    for path, source_lines, diagnostics in analyzed_files:
+        artifact_uri = path.resolve().as_uri()
+        for diagnostic in diagnostics:
+            rule_id = _sarif_rule_id(diagnostic)
+            if rule_id is not None and rule_id not in rules:
+                rules[rule_id] = {
+                    "id": rule_id,
+                    "shortDescription": {"text": _diagnostic_summary(diagnostic.message)},
+                }
+
+            results.append(
+                _sarif_result(
+                    diagnostic,
+                    artifact_uri=artifact_uri,
+                    rule_id=rule_id,
+                    source_lines=source_lines,
+                )
+            )
+
+    driver: dict[str, object] = {"name": "make-ls"}
+    if rules:
+        driver["rules"] = list(rules.values())
+
+    return {
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [
+            {
+                "tool": {"driver": driver},
+                "columnKind": "unicodeCodePoints",
+                "results": results,
+            }
+        ],
+    }
+
+
+def _sarif_result(
+    diagnostic: lsp.Diagnostic,
+    *,
+    artifact_uri: str,
+    rule_id: str | None,
+    source_lines: list[str],
+) -> dict[str, object]:
+    start = diagnostic.range.start
+    region: dict[str, object] = {
+        "startLine": start.line + 1,
+        "startColumn": start.character + 1,
+    }
+    if 0 <= start.line < len(source_lines):
+        region["snippet"] = {"text": source_lines[start.line]}
+
+    result: dict[str, object] = {
+        "level": _sarif_level(diagnostic.severity),
+        "message": {"text": " ".join(diagnostic.message.splitlines())},
+        "locations": [
+            {
+                "physicalLocation": {
+                    "artifactLocation": {"uri": artifact_uri},
+                    "region": region,
+                }
+            }
+        ],
+    }
+    if rule_id is not None:
+        result["ruleId"] = rule_id
+    return result
+
+
+def _sarif_rule_id(diagnostic: lsp.Diagnostic) -> str | None:
+    if diagnostic.code is not None:
+        return str(diagnostic.code)
+
+    message = diagnostic.message
+    if message.startswith("Invalid Makefile syntax"):
+        return "make-syntax"
+    if message.startswith("Invalid shell syntax in recipe"):
+        return "shell-syntax"
+    if message.startswith("Invalid variable reference in assignment"):
+        return "invalid-variable-reference"
+    return None
+
+
+def _sarif_level(severity: lsp.DiagnosticSeverity | int | None) -> str:
+    if severity == lsp.DiagnosticSeverity.Error:
+        return "error"
+    if severity == lsp.DiagnosticSeverity.Warning:
+        return "warning"
+    return "note"
+
+
+def _diagnostic_summary(message: str) -> str:
+    prefix, separator, _rest = message.partition(": `")
+    if separator != "":
+        return prefix
+    return message
+
+
+def _format_diagnostic_context(
+    source_lines: list[str],
+    diagnostic: lsp.Diagnostic,
+    *,
+    severity: str,
+    color: bool,
+) -> str | None:
+    start = diagnostic.range.start
+    if start.line < 0 or start.line >= len(source_lines):
+        return None
+
+    raw_line = source_lines[start.line]
+    line_number = start.line + 1
+    gutter_width = len(str(line_number))
+    display_line = raw_line.expandtabs(CHECK_CONTEXT_TAB_WIDTH)
+    marker_start = _display_column(raw_line, start.character)
+    marker_end_character = (
+        diagnostic.range.end.character
+        if diagnostic.range.end.line == start.line
+        else len(raw_line)
+    )
+    marker_end = _display_column(raw_line, marker_end_character)
+    marker_width = max(1, marker_end - marker_start)
+    marker = (" " * marker_start) + ("^" * marker_width)
+    line_prefix = _styled(f"{line_number:>{gutter_width}} | ", ANSI_DIM, enabled=color)
+    marker_prefix = _styled(f"{' ' * gutter_width} | ", ANSI_DIM, enabled=color)
+    marker_text = _styled(marker, _severity_ansi_code(severity), enabled=color)
+    return f"{line_prefix}{display_line}\n{marker_prefix}{marker_text}"
+
+
+def _display_column(text: str, character: int) -> int:
+    clamped_character = max(0, min(character, len(text)))
+    # LSP columns are character-based, so expand tabs before drawing carets.
+    return len(text[:clamped_character].expandtabs(CHECK_CONTEXT_TAB_WIDTH))
+
+
+def _check_uses_color(stream: TextIO) -> bool:
+    force_color = os.environ.get("FORCE_COLOR")
+    if force_color not in {None, "", "0"}:
+        return True
+    if os.environ.get("NO_COLOR") is not None:
+        return False
+    isatty = getattr(stream, "isatty", None)
+    if isatty is None or not isatty():
+        return False
+    return os.environ.get("TERM", "") != "dumb"
+
+
+def _severity_ansi_code(severity: str) -> str:
+    if severity == "error":
+        return ANSI_RED
+    if severity == "warning":
+        return ANSI_YELLOW
+    if severity == "info":
+        return ANSI_BLUE
+    if severity == "hint":
+        return ANSI_CYAN
+    return ANSI_BOLD
+
+
+def _styled(text: str, *codes: str, enabled: bool) -> str:
+    if not enabled or not codes:
+        return text
+    return "".join(codes) + text + ANSI_RESET
 
 
 def configure_logging(log_file: Path | None, log_level: str) -> None:

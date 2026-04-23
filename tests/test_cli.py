@@ -1,11 +1,27 @@
 from __future__ import annotations
 
+import io
+import json
 import logging
+import re
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from make_ls import __main__ as cli
+
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def expect_dict(value: object) -> dict[str, object]:
+    assert isinstance(value, dict)
+    return cast(dict[str, object], value)
+
+
+def expect_list(value: object) -> list[object]:
+    assert isinstance(value, list)
+    return cast(list[object], value)
 
 
 def test_main_without_subcommand_starts_language_server(
@@ -205,10 +221,15 @@ def test_check_reports_diagnostics_for_positional_file_list(
 
     captured = capsys.readouterr()
     assert captured.err == ""
-    assert captured.out.splitlines() == [
-        "defs:1:1: error: Invalid Makefile syntax: `all dep`",
-        "rules:1:1: error: Invalid Makefile syntax: `also bad`",
-    ]
+    assert captured.out == (
+        "defs:1:1: error: Invalid Makefile syntax: `all dep`\n"
+        "1 | all dep\n"
+        "  | ^^^^^^^\n"
+        "\n"
+        "rules:1:1: error: Invalid Makefile syntax: `also bad`\n"
+        "1 | also bad\n"
+        "  | ^^^^^^^^\n"
+    )
 
 
 def test_check_reports_unresolved_prerequisite_warning(
@@ -223,9 +244,83 @@ def test_check_reports_unresolved_prerequisite_warning(
 
     captured = capsys.readouterr()
     assert captured.err == ""
-    assert captured.out.splitlines() == [
-        "Makefile:1:6: warning: Unresolved prerequisite: `dep`",
-    ]
+    assert captured.out == (
+        "Makefile:1:6: warning: Unresolved prerequisite: `dep`\n"
+        "1 | all: dep\n"
+        "  |      ^^^\n"
+    )
+
+
+def test_check_uses_color_for_tty_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ = (tmp_path / "Makefile").write_text("all dep\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+
+    class TtyStringIO(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    stdout = TtyStringIO()
+    stderr = io.StringIO()
+    monkeypatch.setattr(cli.sys, "stdout", stdout)
+    monkeypatch.setattr(cli.sys, "stderr", stderr)
+
+    assert cli.main(["check", "Makefile"]) == 1
+    plain_output = ANSI_ESCAPE_RE.sub("", stdout.getvalue())
+    assert "\x1b[" in stdout.getvalue()
+    assert plain_output == (
+        "Makefile:1:1: error: Invalid Makefile syntax: `all dep`\n"
+        "1 | all dep\n"
+        "  | ^^^^^^^\n"
+    )
+
+
+def test_check_can_emit_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _ = (tmp_path / "Makefile").write_text("all: dep\n\t@echo done\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["check", "--format", "json", "Makefile"]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    sarif = expect_dict(cast(object, json.loads(captured.out)))
+    assert sarif["version"] == "2.1.0"
+
+    runs = expect_list(sarif["runs"])
+    run = expect_dict(runs[0])
+    assert run["columnKind"] == "unicodeCodePoints"
+
+    tool = expect_dict(run["tool"])
+    driver = expect_dict(tool["driver"])
+    assert driver["name"] == "make-ls"
+
+    results = expect_list(run["results"])
+    result = expect_dict(results[0])
+    assert result["ruleId"] == "unresolved-prerequisite"
+    assert result["level"] == "warning"
+    message = expect_dict(result["message"])
+    assert message["text"] == "Unresolved prerequisite: `dep`"
+
+    locations = expect_list(result["locations"])
+    location = expect_dict(locations[0])
+    physical_location = expect_dict(location["physicalLocation"])
+    artifact_location = expect_dict(physical_location["artifactLocation"])
+    region = expect_dict(physical_location["region"])
+
+    assert artifact_location["uri"] == (tmp_path / "Makefile").resolve().as_uri()
+    assert region == {
+        "startLine": 1,
+        "startColumn": 6,
+        "snippet": {"text": "all: dep"},
+    }
 
 
 def test_check_defaults_to_current_directory_and_skips_hidden_dirs(

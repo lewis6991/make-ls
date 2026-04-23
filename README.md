@@ -61,6 +61,7 @@ Lint files or directories:
 ```sh
 make-ls check Makefile rules.mk
 make-ls check .
+make-ls check --format json . > make-ls.sarif
 ```
 
 For local development:
