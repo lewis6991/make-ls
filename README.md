@@ -37,6 +37,22 @@ uv tool install make-ls
 make-ls
 ```
 
+In stdio LSP mode this writes logs to `$XDG_STATE_HOME/make-ls/`, or
+`~/.local/state/make-ls/` when `XDG_STATE_HOME` is unset. The default file name
+is a stable hash derived from the launch directory.
+
+To override the log path:
+
+```sh
+make-ls --log-file /tmp/make-ls.log --log-level debug
+```
+
+To disable file logging entirely:
+
+```sh
+make-ls --no-log-file
+```
+
 Lint files or directories:
 
 ```sh
@@ -62,6 +78,9 @@ vim.lsp.config('make-ls', {
 
 vim.lsp.enable("make-ls")
 ```
+
+With the default `cmd = { 'make-ls' }`, Neovim LSP logs land in a launch-path
+specific file under the XDG state log directory.
 
 ## Development
 

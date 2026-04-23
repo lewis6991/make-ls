@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import logging
 import os
 import sys
 from collections.abc import Sequence
@@ -13,10 +15,19 @@ from .analysis import analyze_document
 from .server import create_server
 
 MAKEFILE_FILENAMES = frozenset({"Makefile", "makefile", "GNUmakefile"})
+LOG_LEVELS = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warning": logging.WARNING,
+    "error": logging.ERROR,
+}
 
 
 class MakeLsArgs(argparse.Namespace):
     command: str | None
+    log_file: str | None
+    log_level: str
+    no_log_file: bool
     paths: list[str]
 
 
@@ -26,9 +37,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         list(argv) if argv is not None else None,
         namespace=MakeLsArgs(),
     )
+    log_file = _resolved_log_file(
+        args.log_file,
+        command=args.command,
+        no_log_file=args.no_log_file,
+    )
+    try:
+        configure_logging(log_file, args.log_level)
+    except OSError as error:
+        print(f"make-ls: failed to open log file {log_file}: {error}", file=sys.stderr)
+        return 2
+
     if args.command == "check":
         return _run_check(args.paths, stdout=sys.stdout, stderr=sys.stderr)
 
+    logging.getLogger("make_ls").info("starting stdio server")
     create_server().start_io()
     return 0
 
@@ -37,6 +60,24 @@ def _argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="make-ls",
         description="Makefile language server. Run without a subcommand to start stdio LSP.",
+    )
+    _ = parser.add_argument(
+        "--log-file",
+        nargs="?",
+        metavar="path",
+        const="",
+        help="Write make-ls LSP logs to a file. Stdio LSP defaults to the XDG state log file.",
+    )
+    _ = parser.add_argument(
+        "--log-level",
+        choices=tuple(LOG_LEVELS),
+        default="debug",
+        help="Log verbosity for the LSP log file.",
+    )
+    _ = parser.add_argument(
+        "--no-log-file",
+        action="store_true",
+        help="Disable the default stdio LSP log file.",
     )
     subparsers = parser.add_subparsers(dest="command", metavar="check [paths ...]")
     check_parser = subparsers.add_parser(
@@ -158,6 +199,56 @@ def _diagnostic_severity_name(severity: lsp.DiagnosticSeverity | int | None) -> 
     if severity == lsp.DiagnosticSeverity.Hint:
         return "hint"
     return "diagnostic"
+
+
+def configure_logging(log_file: Path | None, log_level: str) -> None:
+    logger = logging.getLogger("make_ls")
+    logger.propagate = False
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+        handler.close()
+
+    if log_file is None:
+        logger.setLevel(logging.NOTSET)
+        return
+
+    # stdio LSP owns stdout, so opt-in debug output has to live in a separate file.
+    log_path = log_file.expanduser()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(log_path, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(LOG_LEVELS[log_level])
+    logger.info("logging enabled path=%s level=%s", log_path, log_level)
+
+
+def _resolved_log_file(
+    raw_log_file: str | None,
+    *,
+    command: str | None,
+    no_log_file: bool,
+) -> Path | None:
+    if no_log_file:
+        return None
+    if raw_log_file == "":
+        return _default_log_file()
+    if raw_log_file is not None:
+        return Path(raw_log_file)
+    if command is None:
+        return _default_log_file()
+    return None
+
+
+def _default_log_file() -> Path:
+    launch_path = Path.cwd().resolve()
+    launch_hash = hashlib.sha1(str(launch_path).encode("utf-8")).hexdigest()[:8]
+    raw_state_home = os.environ.get("XDG_STATE_HOME")
+    state_home = (
+        Path(raw_state_home).expanduser()
+        if raw_state_home is not None
+        else Path.home() / ".local" / "state"
+    )
+    return state_home / "make-ls" / f"make-ls-{launch_hash}.log"
 
 
 if __name__ == "__main__":

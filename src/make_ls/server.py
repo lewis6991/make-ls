@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -17,6 +18,8 @@ from .analysis import (
     rename_variable_for_position,
 )
 from .types import AnalyzedDocument
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _server_version() -> str:
@@ -97,6 +100,11 @@ class MakeLsLanguageServer(LanguageServer):
 
     def publish_document_diagnostics(self, uri: str) -> None:
         analyzed = self.analyze_uri(uri)
+        LOGGER.debug(
+            "textDocument/publishDiagnostics uri=%s count=%d",
+            uri,
+            len(analyzed.diagnostics),
+        )
         self.text_document_publish_diagnostics(
             lsp.PublishDiagnosticsParams(uri=uri, diagnostics=list(analyzed.diagnostics))
         )
@@ -106,16 +114,28 @@ def create_server() -> MakeLsLanguageServer:
     server = MakeLsLanguageServer()
 
     def did_open(ls: MakeLsLanguageServer, params: lsp.DidOpenTextDocumentParams) -> None:
+        LOGGER.debug(
+            "textDocument/didOpen uri=%s version=%s",
+            params.text_document.uri,
+            params.text_document.version,
+        )
         ls.publish_document_diagnostics(params.text_document.uri)
 
     _ = server.feature(lsp.TEXT_DOCUMENT_DID_OPEN)(did_open)
 
     def did_change(ls: MakeLsLanguageServer, params: lsp.DidChangeTextDocumentParams) -> None:
+        LOGGER.debug(
+            "textDocument/didChange uri=%s version=%s changes=%d",
+            params.text_document.uri,
+            params.text_document.version,
+            len(params.content_changes),
+        )
         ls.publish_document_diagnostics(params.text_document.uri)
 
     _ = server.feature(lsp.TEXT_DOCUMENT_DID_CHANGE)(did_change)
 
     def did_close(ls: MakeLsLanguageServer, params: lsp.DidCloseTextDocumentParams) -> None:
+        LOGGER.debug("textDocument/didClose uri=%s", params.text_document.uri)
         ls.clear_uri(params.text_document.uri)
         ls.text_document_publish_diagnostics(
             lsp.PublishDiagnosticsParams(uri=params.text_document.uri, diagnostics=[])
@@ -133,10 +153,25 @@ def create_server() -> MakeLsLanguageServer:
             source_lines=source_lines,
         )
         if hover_result is not None:
+            LOGGER.debug(
+                "textDocument/hover uri=%s position=%d:%d result=local",
+                params.text_document.uri,
+                params.position.line + 1,
+                params.position.character + 1,
+            )
             return hover_result
 
         documents = ls.included_documents(params.text_document.uri)
-        return hover_for_position(document, params.position, documents[1:], source_lines)
+        hover_result = hover_for_position(document, params.position, documents[1:], source_lines)
+        LOGGER.debug(
+            "textDocument/hover uri=%s position=%d:%d result=%s includes=%d",
+            params.text_document.uri,
+            params.position.line + 1,
+            params.position.character + 1,
+            "included" if hover_result is not None else "miss",
+            len(documents) - 1,
+        )
+        return hover_result
 
     _ = server.feature(lsp.TEXT_DOCUMENT_HOVER)(hover)
 
@@ -146,10 +181,29 @@ def create_server() -> MakeLsLanguageServer:
         document = ls.analyze_uri(params.text_document.uri)
         local_definition = definition_for_position(document, params.position)
         if local_definition is not None:
+            LOGGER.debug(
+                "textDocument/definition uri=%s position=%d:%d result=local locations=%d",
+                params.text_document.uri,
+                params.position.line + 1,
+                params.position.character + 1,
+                1 if isinstance(local_definition, lsp.Location) else len(local_definition),
+            )
             return local_definition
 
         documents = ls.included_documents(params.text_document.uri)
-        return definition_for_position(document, params.position, documents[1:])
+        definition_result = definition_for_position(document, params.position, documents[1:])
+        LOGGER.debug(
+            "textDocument/definition uri=%s position=%d:%d result=%s locations=%d includes=%d",
+            params.text_document.uri,
+            params.position.line + 1,
+            params.position.character + 1,
+            "included" if definition_result is not None else "miss",
+            0
+            if definition_result is None
+            else 1 if isinstance(definition_result, lsp.Location) else len(definition_result),
+            len(documents) - 1,
+        )
+        return definition_result
 
     _ = server.feature(lsp.TEXT_DOCUMENT_DEFINITION)(definition)
 
@@ -163,13 +217,24 @@ def create_server() -> MakeLsLanguageServer:
         if occurrence is not None and occurrence.kind == "target":
             related_documents = ls.included_documents(params.text_document.uri)[1:]
 
-        return references_for_position(
+        reference_result = references_for_position(
             document,
             params.position,
             tuple(text_document.source.splitlines()),
             related_documents,
             include_declaration=params.context.include_declaration,
         )
+        LOGGER.debug(
+            "textDocument/references uri=%s position=%d:%d include_declaration=%s "
+            "locations=%d includes=%d",
+            params.text_document.uri,
+            params.position.line + 1,
+            params.position.character + 1,
+            params.context.include_declaration,
+            0 if reference_result is None else len(reference_result),
+            len(related_documents),
+        )
+        return reference_result
 
     _ = server.feature(lsp.TEXT_DOCUMENT_REFERENCES)(references)
 
@@ -178,23 +243,42 @@ def create_server() -> MakeLsLanguageServer:
     ) -> lsp.PrepareRenameResult | None:
         document = ls.analyze_uri(params.text_document.uri)
         text_document = ls.workspace.get_text_document(params.text_document.uri)
-        return prepare_rename_for_position(
+        rename_result = prepare_rename_for_position(
             document,
             params.position,
             tuple(text_document.source.splitlines()),
         )
+        LOGGER.debug(
+            "textDocument/prepareRename uri=%s position=%d:%d result=%s",
+            params.text_document.uri,
+            params.position.line + 1,
+            params.position.character + 1,
+            rename_result is not None,
+        )
+        return rename_result
 
     _ = server.feature(lsp.TEXT_DOCUMENT_PREPARE_RENAME)(prepare_rename)
 
     def rename(ls: MakeLsLanguageServer, params: lsp.RenameParams) -> lsp.WorkspaceEdit | None:
         document = ls.analyze_uri(params.text_document.uri)
         text_document = ls.workspace.get_text_document(params.text_document.uri)
-        return rename_variable_for_position(
+        workspace_edit = rename_variable_for_position(
             document,
             params.position,
             params.new_name,
             tuple(text_document.source.splitlines()),
         )
+        LOGGER.debug(
+            "textDocument/rename uri=%s position=%d:%d new_name=%s changes=%d",
+            params.text_document.uri,
+            params.position.line + 1,
+            params.position.character + 1,
+            params.new_name,
+            0
+            if workspace_edit is None or workspace_edit.changes is None
+            else sum(len(edits) for edits in workspace_edit.changes.values()),
+        )
+        return workspace_edit
 
     _ = server.feature(lsp.TEXT_DOCUMENT_RENAME)(rename)
 
