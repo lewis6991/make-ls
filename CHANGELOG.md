@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.4.0](https://github.com/lewis6991/make-ls/compare/v0.3.0...v0.4.0) (2026-04-23)
+
+
+### Features
+
+* add LSP file logging ([87d6378](https://github.com/lewis6991/make-ls/commit/87d63788d86abab0aefb827bc6c0119a50d7f211))
+* add Make quick fixes and prerequisite lint ([e5e452b](https://github.com/lewis6991/make-ls/commit/e5e452b4063b06b95b98d0ba0051a7a76b50ef32))
+* add make-ls check subcommand ([bf763de](https://github.com/lewis6991/make-ls/commit/bf763de0d694cb5cd070d6333c47921a5638a219))
+* add more Makefile diagnostics ([1d84af2](https://github.com/lewis6991/make-ls/commit/1d84af26f90e961fb24916d630a204fc0900bbf7))
+* improve check output ([1016e72](https://github.com/lewis6991/make-ls/commit/1016e721f61521bc406bde69449b14d6b3acdab3))
+* track Make symbol context ([727697b](https://github.com/lewis6991/make-ls/commit/727697b46e22b60c4f9159fb28978652e69642e7))
+
+
+### Bug Fixes
+
+* improve diagnostics for includes and grouped targets ([0c3a75b](https://github.com/lewis6991/make-ls/commit/0c3a75b6386c8f20b2f5a83c1dc62adcbc469d1a))
+* respect direct recipe-local eval assignments ([c92d1bc](https://github.com/lewis6991/make-ls/commit/c92d1bca8bdff6b2b732ad92485bd7ca73f1ba16))
+
+
+### Documentation
+
+* simplify README ([b7313b1](https://github.com/lewis6991/make-ls/commit/b7313b1ac3b0140802819fee63e3017cbf6d93d1))
+
 ## [0.3.0](https://github.com/lewis6991/make-ls/compare/v0.2.0...v0.3.0) (2026-04-22)
 
 
