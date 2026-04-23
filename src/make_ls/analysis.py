@@ -5,8 +5,10 @@ import re
 import subprocess
 from collections import defaultdict, deque
 from dataclasses import dataclass
+from pathlib import Path
 
 from lsprotocol import types as lsp
+from pygls.uris import to_fs_path
 
 from .builtin_docs import (
     BUILTIN_VARIABLE_DOCS,
@@ -56,6 +58,8 @@ RULE_DIRECTIVES = frozenset(DIRECTIVE_DOCS)
 INCLUDE_DIRECTIVES = frozenset({"include", "-include", "sinclude"})
 VARIABLE_NAME_RE = re.compile(r"^[A-Za-z0-9_.%/@+-]+$")
 EMPTY_CONDITIONAL_ARGUMENTS = frozenset({"", '""', "''"})
+UNKNOWN_VARIABLE_DIAGNOSTIC_CODE = "unknown-variable"
+UNRESOLVED_PREREQUISITE_DIAGNOSTIC_CODE = "unresolved-prerequisite"
 
 
 def analyze_document(
@@ -127,6 +131,13 @@ def analyze_document(
         variable_map,
         occurrences,
     )
+    unresolved_prerequisite_diagnostics = _collect_unresolved_prerequisite_diagnostics(
+        uri,
+        occurrences,
+        set(target_map),
+        phony_targets,
+        tuple(recovered_includes),
+    )
     shell_diagnostics = (
         _collect_shell_diagnostics(recipe_lines) if include_shell_diagnostics else []
     )
@@ -145,6 +156,7 @@ def analyze_document(
                 *make_diagnostics,
                 *recovered_assignment_diagnostics,
                 *unknown_variable_diagnostics,
+                *unresolved_prerequisite_diagnostics,
                 *shell_diagnostics,
             ]
         ),
@@ -578,9 +590,21 @@ def _definition_target_definitions(
     if local_definitions:
         return tuple((document, definition) for definition in local_definitions)
 
+    local_pattern_definitions = _pattern_target_definitions(document, name)
+    if local_pattern_definitions:
+        return tuple((document, definition) for definition in local_pattern_definitions)
+
     definitions: list[tuple[AnalyzedDocument, TargetDefinition]] = []
     for related_document in related_documents:
         related_definitions = related_document.targets.get(name)
+        if not related_definitions:
+            continue
+        definitions.extend((related_document, definition) for definition in related_definitions)
+    if definitions:
+        return tuple(definitions)
+
+    for related_document in related_documents:
+        related_definitions = _pattern_target_definitions(related_document, name)
         if not related_definitions:
             continue
         definitions.extend((related_document, definition) for definition in related_definitions)
@@ -656,12 +680,22 @@ def _hover_target_definitions(
     if local_definitions:
         return tuple((document, definition) for definition in local_definitions)
 
+    local_pattern_definitions = _pattern_target_definitions(document, name)
+    if local_pattern_definitions:
+        return tuple((document, definition) for definition in local_pattern_definitions)
+
     matching_documents: list[tuple[AnalyzedDocument, tuple[TargetDefinition, ...]]] = []
     for related_document in related_documents:
         related_definitions = related_document.targets.get(name)
         if not related_definitions:
             continue
         matching_documents.append((related_document, related_definitions))
+    if not matching_documents:
+        for related_document in related_documents:
+            related_definitions = _pattern_target_definitions(related_document, name)
+            if not related_definitions:
+                continue
+            matching_documents.append((related_document, related_definitions))
 
     if len(matching_documents) != 1:
         return ()
@@ -1061,6 +1095,49 @@ def _collect_unknown_variable_diagnostics(
                     "Unknown variable reference",
                     occurrence_text,
                 ),
+                code=UNKNOWN_VARIABLE_DIAGNOSTIC_CODE,
+                severity=lsp.DiagnosticSeverity.Warning,
+                source="make-ls",
+            )
+        )
+    return diagnostics
+
+
+def _collect_unresolved_prerequisite_diagnostics(
+    uri: str,
+    occurrences: list[SymbolOccurrence],
+    target_names: set[str],
+    phony_targets: set[str],
+    include_patterns: tuple[str, ...],
+) -> list[lsp.Diagnostic]:
+    diagnostics: list[lsp.Diagnostic] = []
+    base_directory = _uri_base_directory(uri)
+    included_targets: tuple[frozenset[str], frozenset[str]] | None = None
+    for occurrence in occurrences:
+        if occurrence.kind != "target" or occurrence.role != "reference":
+            continue
+        if occurrence.context is None or occurrence.context.kind != "prerequisite":
+            continue
+        if not _should_warn_for_unresolved_prerequisite(occurrence.name):
+            continue
+        if _matches_target_names(occurrence.name, target_names) or occurrence.name in phony_targets:
+            continue
+        if base_directory is not None and _prerequisite_exists(base_directory, occurrence.name):
+            continue
+        if base_directory is not None and include_patterns:
+            if included_targets is None:
+                included_targets = _included_target_names(base_directory, include_patterns)
+            if (
+                _matches_target_names(occurrence.name, included_targets[0])
+                or occurrence.name in included_targets[1]
+            ):
+                continue
+
+        diagnostics.append(
+            lsp.Diagnostic(
+                range=occurrence.span.to_lsp_range(),
+                message=_diagnostic_message("Unresolved prerequisite", occurrence.name),
+                code=UNRESOLVED_PREREQUISITE_DIAGNOSTIC_CODE,
                 severity=lsp.DiagnosticSeverity.Warning,
                 source="make-ls",
             )
@@ -1088,6 +1165,123 @@ def _make_syntax_diagnostic(
         severity=lsp.DiagnosticSeverity.Error,
         source="make-ls",
     )
+
+
+def _uri_base_directory(uri: str) -> Path | None:
+    path = to_fs_path(uri)
+    if path is None:
+        return None
+    return Path(path).parent
+
+
+def _should_warn_for_unresolved_prerequisite(name: str) -> bool:
+    if name in SPECIAL_TARGET_DOCS:
+        return False
+    return not any(character in name for character in "%*?[]$()")
+
+
+def _matches_target_names(name: str, target_names: set[str] | frozenset[str]) -> bool:
+    return any(_matches_target_name(name, target_name) for target_name in target_names)
+
+
+def _pattern_target_definitions(
+    document: AnalyzedDocument,
+    name: str,
+) -> tuple[TargetDefinition, ...]:
+    definitions: list[TargetDefinition] = []
+    for target_name, target_definitions in document.targets.items():
+        if "%" not in target_name or not _matches_target_name(name, target_name):
+            continue
+        definitions.extend(target_definitions)
+    return tuple(definitions)
+
+
+def _matches_target_name(name: str, target_name: str) -> bool:
+    if "%" not in target_name:
+        return name == target_name
+
+    prefix, _, suffix = target_name.partition("%")
+    return (
+        name.startswith(prefix)
+        and name.endswith(suffix)
+        and len(name) > len(prefix) + len(suffix)
+    )
+
+
+def _prerequisite_exists(base_directory: Path, name: str) -> bool:
+    candidate_path = Path(name) if Path(name).is_absolute() else base_directory / name
+    try:
+        return candidate_path.exists()
+    except OSError:
+        return False
+
+
+def _included_target_names(
+    base_directory: Path,
+    include_patterns: tuple[str, ...],
+) -> tuple[frozenset[str], frozenset[str]]:
+    targets: set[str] = set()
+    phony_targets: set[str] = set()
+    seen_paths: set[Path] = set()
+    for path in _resolved_static_include_paths(base_directory, include_patterns):
+        _extend_included_target_names(path, seen_paths, targets, phony_targets)
+    return frozenset(targets), frozenset(phony_targets)
+
+
+def _extend_included_target_names(
+    path: Path,
+    seen_paths: set[Path],
+    targets: set[str],
+    phony_targets: set[str],
+) -> None:
+    resolved_path = path.resolve()
+    if resolved_path in seen_paths:
+        return
+    seen_paths.add(resolved_path)
+
+    try:
+        source_lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return
+
+    (
+        definitions,
+        _target_occurrences,
+        _reference_occurrences,
+        _recipe_lines,
+        _parsed_lines,
+        _forms,
+    ) = _recover_rules(source_lines, {})
+    targets.update(definition.name for definition in definitions)
+    phony_targets.update(_declared_phony_targets(definitions))
+
+    include_patterns, _parsed_include_lines = _recover_include_directives(source_lines)
+    for include_path in _resolved_static_include_paths(path.parent, tuple(include_patterns)):
+        _extend_included_target_names(include_path, seen_paths, targets, phony_targets)
+
+
+def _resolved_static_include_paths(
+    base_directory: Path,
+    include_patterns: tuple[str, ...],
+) -> tuple[Path, ...]:
+    resolved_paths: list[Path] = []
+    for include_pattern in include_patterns:
+        if (
+            "$(" in include_pattern
+            or "${" in include_pattern
+            or any(character in include_pattern for character in "*?[]")
+        ):
+            continue
+
+        candidate_path = (
+            Path(include_pattern)
+            if Path(include_pattern).is_absolute()
+            else base_directory / include_pattern
+        )
+        if candidate_path.is_file():
+            resolved_paths.append(candidate_path)
+
+    return tuple(resolved_paths)
 
 
 def _is_tolerated_top_level_line(stripped_line: str) -> bool:
@@ -1325,6 +1519,8 @@ def _recover_prerequisites(
     for line_index, line in enumerate(header_lines):
         text = line[separator_index + separator_width :] if line_index == 0 else line
         text = text.split(";", 1)[0]
+        if line_index == 0 and _is_target_specific_variable_assignment(text):
+            return ()
         for match in TOKEN_RE.finditer(text):
             token = match.group(0)
             if token in {"\\", "|"}:
@@ -1353,6 +1549,8 @@ def _recover_prerequisite_occurrences(
             text = line
             start_character = 0
         text = text.split(";", 1)[0]
+        if line_offset == 0 and _is_target_specific_variable_assignment(text):
+            return []
         line_number = start_line + line_offset
 
         occurrences.extend(
@@ -1387,6 +1585,11 @@ def _recover_prerequisite_occurrences(
             )
 
     return occurrences
+
+
+def _is_target_specific_variable_assignment(text: str) -> bool:
+    stripped = text.strip()
+    return stripped != "" and ASSIGNMENT_RE.fullmatch(stripped) is not None
 
 
 def _recover_variable_references_from_text(

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 import shutil
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,8 @@ from make_ls import __main__ as cli
 from make_ls.types import AnalyzedDocument
 
 from .lsp_harness import LspSession
+
+WorkspaceTextEdit = lsp.TextEdit | lsp.AnnotatedTextEdit | lsp.SnippetTextEdit
 
 
 def hover_value(hover: lsp.Hover) -> str:
@@ -38,17 +42,37 @@ def location_set(locations: list[lsp.Location] | None) -> set[tuple[str, int, in
     }
 
 
-def apply_text_edits(text: str, edits: list[lsp.TextEdit]) -> str:
+def workspace_edits_for_uri(
+    workspace_edit: lsp.WorkspaceEdit,
+    uri: str,
+) -> Sequence[WorkspaceTextEdit]:
+    if workspace_edit.changes is not None:
+        return list(workspace_edit.changes[uri])
+
+    if workspace_edit.document_changes is not None:
+        for change in workspace_edit.document_changes:
+            if isinstance(change, lsp.TextDocumentEdit) and change.text_document.uri == uri:
+                return list(change.edits)
+
+    raise AssertionError("expected edits for document")
+
+
+def apply_text_edits(text: str, edits: Sequence[WorkspaceTextEdit]) -> str:
     line_offsets: list[int] = []
     offset = 0
     for line in text.splitlines(keepends=True):
         line_offsets.append(offset)
         offset += len(line)
-    if not text.endswith("\n"):
-        line_offsets.append(offset)
+    line_offsets.append(offset)
 
     def position_offset(position: lsp.Position) -> int:
         return line_offsets[position.line] + position.character
+
+    def edit_text(edit: WorkspaceTextEdit) -> str:
+        if isinstance(edit, lsp.SnippetTextEdit):
+            snippet = re.sub(r"\$\{\d+:([^}]*)\}", r"\1", edit.snippet.value)
+            return re.sub(r"\$\d+", "", snippet)
+        return edit.new_text
 
     updated = text
     for edit in sorted(
@@ -63,7 +87,7 @@ def apply_text_edits(text: str, edits: list[lsp.TextEdit]) -> str:
     ):
         start_offset = position_offset(edit.range.start)
         end_offset = position_offset(edit.range.end)
-        updated = updated[:start_offset] + edit.new_text + updated[end_offset:]
+        updated = updated[:start_offset] + edit_text(edit) + updated[end_offset:]
     return updated
 
 
@@ -153,6 +177,193 @@ async def test_warns_for_unknown_variable_reference(tmp_path: Path) -> None:
     assert len(diagnostics) == 1
     assert diagnostics[0].severity == lsp.DiagnosticSeverity.Warning
     assert diagnostics[0].message.startswith("Unknown variable reference")
+
+
+@pytest.mark.asyncio
+async def test_warns_for_unresolved_prerequisite(tmp_path: Path) -> None:
+    text = "all: dep\n\t@echo done\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].severity == lsp.DiagnosticSeverity.Warning
+    assert diagnostics[0].message.startswith("Unresolved prerequisite")
+
+
+@pytest.mark.asyncio
+async def test_unresolved_prerequisite_code_action_creates_target_at_eof(
+    tmp_path: Path,
+) -> None:
+    text = "all: dep\n\t@echo done\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+        actions = await session.code_actions(uri, diagnostics[0].range, diagnostics)
+
+    assert len(actions) == 1
+    action = actions[0]
+    assert isinstance(action, lsp.CodeAction)
+    assert action.title == "Create target for dep"
+    assert action.kind == lsp.CodeActionKind.QuickFix
+    assert action.is_preferred is False
+    assert action.edit is not None
+    edits = workspace_edits_for_uri(action.edit, uri)
+    assert len(edits) == 1
+    assert isinstance(edits[0], lsp.SnippetTextEdit)
+    assert edits[0].snippet.value == "\ndep:\n\t# ${1:TODO}\n"
+    updated = apply_text_edits(text, edits)
+    assert updated == "all: dep\n\t@echo done\n\ndep:\n\t# TODO\n"
+
+
+@pytest.mark.asyncio
+async def test_unresolved_path_prerequisite_code_action_creates_target_at_eof(
+    tmp_path: Path,
+) -> None:
+    text = "all: build/out.o\n\t@echo done"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+        actions = await session.code_actions(uri, diagnostics[0].range, diagnostics)
+
+    assert len(actions) == 1
+    action = actions[0]
+    assert isinstance(action, lsp.CodeAction)
+    assert action.title == "Create target for build/out.o"
+    assert action.edit is not None
+    edits = workspace_edits_for_uri(action.edit, uri)
+    assert len(edits) == 1
+    assert isinstance(edits[0], lsp.SnippetTextEdit)
+    assert edits[0].snippet.value == "\n\nbuild/out.o:\n\t# ${1:TODO}\n"
+    updated = apply_text_edits(text, edits)
+    assert updated == "all: build/out.o\n\t@echo done\n\nbuild/out.o:\n\t# TODO\n"
+
+
+@pytest.mark.asyncio
+async def test_unresolved_prerequisite_code_action_falls_back_without_snippet_support(
+    tmp_path: Path,
+) -> None:
+    text = "all: dep\n\t@echo done\n"
+
+    async with LspSession(tmp_path, snippet_edit_support=False) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+        actions = await session.code_actions(uri, diagnostics[0].range, diagnostics)
+
+    assert len(actions) == 1
+    action = actions[0]
+    assert isinstance(action, lsp.CodeAction)
+    assert action.edit is not None
+    edits = workspace_edits_for_uri(action.edit, uri)
+    assert len(edits) == 1
+    assert isinstance(edits[0], lsp.TextEdit)
+    assert edits[0].new_text == "\ndep:\n\t# TODO\n"
+    updated = apply_text_edits(text, edits)
+    assert updated == "all: dep\n\t@echo done\n\ndep:\n\t# TODO\n"
+
+
+@pytest.mark.asyncio
+async def test_does_not_warn_for_existing_file_prerequisite(tmp_path: Path) -> None:
+    _ = (tmp_path / "dep").write_text("done\n", encoding="utf-8")
+    text = "all: dep\n\t@echo done\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_does_not_warn_for_explicit_target_prerequisite(tmp_path: Path) -> None:
+    text = "all: dep\n\t@echo done\n\ndep:\n\t@echo dep\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_does_not_warn_for_prerequisite_matching_pattern_rule(tmp_path: Path) -> None:
+    text = "build_all: build_alpha\n\t@echo done\n\nbuild_%:\n\t@echo dep\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_does_not_warn_for_target_specific_variable_assignment(tmp_path: Path) -> None:
+    text = "suite/% : CASES=cases/suite\nsample/%: CASES=cases/sample\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_does_not_warn_for_included_target_prerequisite(tmp_path: Path) -> None:
+    _ = (tmp_path / "rules.mk").write_text("dep:\n\t@echo dep\n", encoding="utf-8")
+    text = "include rules.mk\n\nall: dep\n\t@echo done\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_does_not_warn_for_phony_prerequisite(tmp_path: Path) -> None:
+    text = ".PHONY: clean\nall: clean\n\t@echo done\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_unknown_variable_code_action_adds_empty_assignment_before_rule(
+    tmp_path: Path,
+) -> None:
+    text = "PREFIX := /usr\nall:\n\t@echo $(FEATURE)\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+        actions = await session.code_actions(uri, diagnostics[0].range, diagnostics)
+
+    assert len(actions) == 1
+    action = actions[0]
+    assert isinstance(action, lsp.CodeAction)
+    assert action.title == "Add empty assignment for FEATURE"
+    assert action.kind == lsp.CodeActionKind.QuickFix
+    assert action.edit is not None
+    updated = apply_text_edits(text, workspace_edits_for_uri(action.edit, uri))
+    assert updated == "PREFIX := /usr\nFEATURE :=\nall:\n\t@echo $(FEATURE)\n"
+
+
+@pytest.mark.asyncio
+async def test_make_syntax_diagnostic_has_no_code_actions(tmp_path: Path) -> None:
+    text = "all dep\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+        actions = await session.code_actions(uri, diagnostics[0].range, diagnostics)
+
+    assert actions == []
 
 
 @pytest.mark.asyncio
@@ -1199,6 +1410,20 @@ async def test_go_to_definition_for_prerequisite(tmp_path: Path) -> None:
         uri = await session.open_document("Makefile", text)
         _ = await session.wait_for_diagnostics(uri)
         definition = await session.definition(uri, 0, 6)
+
+    location = single_location(definition)
+    assert location.range.start.line == 3
+    assert location.range.start.character == 0
+
+
+@pytest.mark.asyncio
+async def test_go_to_definition_for_prerequisite_matching_pattern_rule(tmp_path: Path) -> None:
+    text = "build_all: build_alpha\n\t@echo done\n\nbuild_%:\n\t@echo dep\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        _ = await session.wait_for_diagnostics(uri)
+        definition = await session.definition(uri, 0, 12)
 
     location = single_location(definition)
     assert location.range.start.line == 3

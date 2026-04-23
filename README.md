@@ -13,9 +13,12 @@ It uses an owned Make parser and checks recipe shell syntax with `bash -n`.
 
 - hover, go-to-definition, and references for targets and variables
 - variable rename
+- quick fixes for unknown variables that add an empty assignment
+- quick fixes for unresolved prerequisites that create a target stub recipe
 - `check` subcommand for batch diagnostics
 - hover for common GNU Make directives, functions, builtin variables, and special targets
 - diagnostics for Makefile syntax
+- diagnostics for unresolved plain prerequisites
 - diagnostics for shell syntax inside recipes
 - target lookup through explicit `include`, `-include`, and `sinclude` directives
 
@@ -23,7 +26,7 @@ It uses an owned Make parser and checks recipe shell syntax with `bash -n`.
 
 - no full GNU Make evaluation
 - include resolution is still limited
-- no completion or code actions yet
+- no completion yet
 
 ## Install
 

@@ -211,6 +211,23 @@ def test_check_reports_diagnostics_for_positional_file_list(
     ]
 
 
+def test_check_reports_unresolved_prerequisite_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _ = (tmp_path / "Makefile").write_text("all: dep\n\t@echo done\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["check", "Makefile"]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out.splitlines() == [
+        "Makefile:1:6: warning: Unresolved prerequisite near `dep`",
+    ]
+
+
 def test_check_defaults_to_current_directory_and_skips_hidden_dirs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -28,8 +28,9 @@ class InMemoryWriter:
 
 
 class LspSession:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, snippet_edit_support: bool = True) -> None:
         self.root = root
+        self.snippet_edit_support = snippet_edit_support
         self.server: MakeLsLanguageServer = create_server()
         self.client = LanguageClient("make-ls-tests", "0.1.0")
         self.diagnostics: asyncio.Queue[lsp.PublishDiagnosticsParams] = asyncio.Queue()
@@ -63,6 +64,12 @@ class LspSession:
                 process_id=None,
                 root_uri=self.root.as_uri(),
                 capabilities=lsp.ClientCapabilities(
+                    workspace=lsp.WorkspaceClientCapabilities(
+                        workspace_edit=lsp.WorkspaceEditClientCapabilities(
+                            document_changes=self.snippet_edit_support,
+                            snippet_edit_support=self.snippet_edit_support,
+                        )
+                    ),
                     text_document=lsp.TextDocumentClientCapabilities(
                         rename=lsp.RenameClientCapabilities(prepare_support=True)
                     )
@@ -117,6 +124,24 @@ class LspSession:
             params = await asyncio.wait_for(self.diagnostics.get(), timeout=1)
             if params.uri == uri:
                 return list(params.diagnostics)
+
+    async def code_actions(
+        self,
+        uri: str,
+        range: lsp.Range,
+        diagnostics: list[lsp.Diagnostic],
+    ) -> list[lsp.CodeAction | lsp.Command]:
+        result = await self.client.text_document_code_action_async(
+            lsp.CodeActionParams(
+                text_document=lsp.TextDocumentIdentifier(uri=uri),
+                range=range,
+                context=lsp.CodeActionContext(
+                    diagnostics=diagnostics,
+                    only=[lsp.CodeActionKind.QuickFix],
+                ),
+            )
+        )
+        return [] if result is None else list(result)
 
     async def hover(self, uri: str, line: int, character: int) -> lsp.Hover | None:
         return await self.client.text_document_hover_async(
