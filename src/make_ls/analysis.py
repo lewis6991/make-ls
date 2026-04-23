@@ -59,6 +59,7 @@ INCLUDE_DIRECTIVES = frozenset({"include", "-include", "sinclude"})
 VARIABLE_NAME_RE = re.compile(r"^[A-Za-z0-9_.%/@+-]+$")
 EMPTY_CONDITIONAL_ARGUMENTS = frozenset({"", '""', "''"})
 UNKNOWN_VARIABLE_DIAGNOSTIC_CODE = "unknown-variable"
+UNRESOLVED_INCLUDE_DIAGNOSTIC_CODE = "unresolved-include"
 UNRESOLVED_PREREQUISITE_DIAGNOSTIC_CODE = "unresolved-prerequisite"
 
 
@@ -131,12 +132,17 @@ def analyze_document(
         variable_map,
         occurrences,
     )
+    unresolved_include_diagnostics = _collect_unresolved_include_diagnostics(
+        uri,
+        recovered_includes,
+        set(target_map),
+    )
     unresolved_prerequisite_diagnostics = _collect_unresolved_prerequisite_diagnostics(
         uri,
         occurrences,
         set(target_map),
         phony_targets,
-        tuple(recovered_includes),
+        tuple(include.path for include in recovered_includes),
     )
     shell_diagnostics = (
         _collect_shell_diagnostics(recipe_lines) if include_shell_diagnostics else []
@@ -147,7 +153,7 @@ def analyze_document(
         version=version,
         targets={name: tuple(definitions) for name, definitions in target_map.items()},
         variables={name: tuple(definitions) for name, definitions in variable_map.items()},
-        includes=tuple(recovered_includes),
+        includes=tuple(include.path for include in recovered_includes),
         phony_targets=frozenset(phony_targets),
         occurrences=tuple(occurrences),
         forms=tuple(forms),
@@ -156,6 +162,7 @@ def analyze_document(
                 *make_diagnostics,
                 *recovered_assignment_diagnostics,
                 *unknown_variable_diagnostics,
+                *unresolved_include_diagnostics,
                 *unresolved_prerequisite_diagnostics,
                 *shell_diagnostics,
             ]
@@ -797,6 +804,13 @@ class _ConditionalFrame:
     else_guards: tuple[VariableGuard, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _RecoveredInclude:
+    path: str
+    span: Span
+    optional: bool
+
+
 def _recover_conditionals(
     source_lines: list[str],
 ) -> tuple[list[DocumentForm], list[SymbolOccurrence], dict[int, tuple[VariableGuard, ...]]]:
@@ -1103,6 +1117,52 @@ def _collect_unknown_variable_diagnostics(
     return diagnostics
 
 
+def _collect_unresolved_include_diagnostics(
+    uri: str,
+    includes: list[_RecoveredInclude],
+    target_names: set[str],
+) -> list[lsp.Diagnostic]:
+    diagnostics: list[lsp.Diagnostic] = []
+    base_directory = _uri_base_directory(uri)
+    include_patterns = tuple(include.path for include in includes)
+    included_targets: tuple[frozenset[str], frozenset[str]] | None = None
+
+    for include in includes:
+        if include.optional or not _should_warn_for_unresolved_include(include.path):
+            continue
+
+        if _matches_target_names(include.path, target_names):
+            continue
+
+        candidate_path = _static_include_path(base_directory, include.path)
+        if candidate_path is None:
+            continue
+        try:
+            if candidate_path.exists():
+                continue
+        except OSError:
+            continue
+
+        if base_directory is not None and include_patterns:
+            if included_targets is None:
+                included_targets = _included_target_names(base_directory, include_patterns)
+            # GNU Make can remake missing include files from ordinary targets.
+            if _matches_target_names(include.path, included_targets[0]):
+                continue
+
+        diagnostics.append(
+            lsp.Diagnostic(
+                range=include.span.to_lsp_range(),
+                message=f"Unresolved include: `{include.path}`",
+                code=UNRESOLVED_INCLUDE_DIAGNOSTIC_CODE,
+                severity=lsp.DiagnosticSeverity.Warning,
+                source="make-ls",
+            )
+        )
+
+    return diagnostics
+
+
 def _collect_unresolved_prerequisite_diagnostics(
     uri: str,
     occurrences: list[SymbolOccurrence],
@@ -1174,6 +1234,18 @@ def _uri_base_directory(uri: str) -> Path | None:
     return Path(path).parent
 
 
+def _is_static_include_pattern(include_pattern: str) -> bool:
+    return (
+        "$(" not in include_pattern
+        and "${" not in include_pattern
+        and not any(character in include_pattern for character in "*?[]")
+    )
+
+
+def _should_warn_for_unresolved_include(name: str) -> bool:
+    return _is_static_include_pattern(name)
+
+
 def _should_warn_for_unresolved_prerequisite(name: str) -> bool:
     if name in SPECIAL_TARGET_DOCS:
         return False
@@ -1216,6 +1288,18 @@ def _prerequisite_exists(base_directory: Path, name: str) -> bool:
         return False
 
 
+def _static_include_path(base_directory: Path | None, include_pattern: str) -> Path | None:
+    if not _is_static_include_pattern(include_pattern):
+        return None
+
+    candidate_path = Path(include_pattern)
+    if candidate_path.is_absolute():
+        return candidate_path
+    if base_directory is None:
+        return None
+    return base_directory / include_pattern
+
+
 def _included_target_names(
     base_directory: Path,
     include_patterns: tuple[str, ...],
@@ -1255,8 +1339,11 @@ def _extend_included_target_names(
     targets.update(definition.name for definition in definitions)
     phony_targets.update(_declared_phony_targets(definitions))
 
-    include_patterns, _parsed_include_lines = _recover_include_directives(source_lines)
-    for include_path in _resolved_static_include_paths(path.parent, tuple(include_patterns)):
+    recovered_includes, _parsed_include_lines = _recover_include_directives(source_lines)
+    for include_path in _resolved_static_include_paths(
+        path.parent,
+        tuple(include.path for include in recovered_includes),
+    ):
         _extend_included_target_names(include_path, seen_paths, targets, phony_targets)
 
 
@@ -1266,18 +1353,9 @@ def _resolved_static_include_paths(
 ) -> tuple[Path, ...]:
     resolved_paths: list[Path] = []
     for include_pattern in include_patterns:
-        if (
-            "$(" in include_pattern
-            or "${" in include_pattern
-            or any(character in include_pattern for character in "*?[]")
-        ):
+        candidate_path = _static_include_path(base_directory, include_pattern)
+        if candidate_path is None:
             continue
-
-        candidate_path = (
-            Path(include_pattern)
-            if Path(include_pattern).is_absolute()
-            else base_directory / include_pattern
-        )
         if candidate_path.is_file():
             resolved_paths.append(candidate_path)
 
@@ -1388,9 +1466,18 @@ def _recover_rule(
         header_lines.append(next_line)
         header_end_line += 1
 
-    separator_index, separator_width = _recover_rule_separator(header_lines[0])
-    if separator_index is None:
+    if not _can_start_rule(header_lines[0]):
         return None
+    separator_line_index, separator_start, separator_width = _recover_rule_separator(header_lines)
+    if separator_line_index is None:
+        return None
+
+    prerequisites = _recover_prerequisites(
+        header_lines,
+        separator_line_index,
+        separator_start,
+        separator_width,
+    )
 
     target_definitions: list[TargetDefinition] = []
     target_occurrences: list[SymbolOccurrence] = []
@@ -1432,40 +1519,43 @@ def _recover_rule(
     )
     rule_span = Span(start_line, 0, rule_end_line, rule_end_character)
     rule_text = header_text if recipe_text is None else f"{header_text}\n{recipe_text}"
-    targets_text = header_lines[0][:separator_index]
-    if targets_text.strip() == "":
-        return None
+    for line_index, line in enumerate(header_lines[: separator_line_index + 1]):
+        target_text = line[:separator_start] if line_index == separator_line_index else line
+        for match in TOKEN_RE.finditer(target_text):
+            target_name = match.group(0)
+            if target_name == "\\":
+                continue
 
-    for match in TOKEN_RE.finditer(targets_text):
-        target_name = match.group(0)
-        if target_name == "\\":
-            continue
-
-        name_span = Span(start_line, match.start(), start_line, match.end())
-        definition = TargetDefinition(
-            name=target_name,
-            name_span=name_span,
-            rule_span=rule_span,
-            prerequisites=_recover_prerequisites(header_lines, separator_index, separator_width),
-            rule_text=rule_text,
-            recipe_text=recipe_text,
-        )
-        target_definitions.append(definition)
-        target_occurrences.append(
-            SymbolOccurrence(
-                kind="target",
-                role="definition",
+            line_number = start_line + line_index
+            name_span = Span(line_number, match.start(), line_number, match.end())
+            definition = TargetDefinition(
                 name=target_name,
-                span=name_span,
-                context=_symbol_context("rule", "target_definition", line_guards, start_line),
+                name_span=name_span,
+                rule_span=rule_span,
+                prerequisites=prerequisites,
+                rule_text=rule_text,
+                recipe_text=recipe_text,
             )
-        )
+            target_definitions.append(definition)
+            target_occurrences.append(
+                SymbolOccurrence(
+                    kind="target",
+                    role="definition",
+                    name=target_name,
+                    span=name_span,
+                    context=_symbol_context("rule", "target_definition", line_guards, line_number),
+                )
+            )
+
+    if not target_definitions:
+        return None
 
     reference_occurrences.extend(
         _recover_prerequisite_occurrences(
             header_lines,
             start_line,
-            separator_index,
+            separator_line_index,
+            separator_start,
             separator_width,
             line_guards,
         )
@@ -1489,15 +1579,24 @@ def _recover_rule(
     )
 
 
-def _recover_rule_separator(line: str) -> tuple[int | None, int]:
+def _can_start_rule(line: str) -> bool:
     stripped = line.lstrip()
     if stripped == "" or stripped.startswith("#"):
-        return None, 0
+        return False
     if stripped.split(maxsplit=1)[0] in RULE_DIRECTIVES:
-        return None, 0
-    if ASSIGNMENT_RE.match(line) is not None:
-        return None, 0
+        return False
+    return ASSIGNMENT_RE.match(line) is None
 
+
+def _recover_rule_separator(header_lines: list[str]) -> tuple[int | None, int, int]:
+    for line_index, line in enumerate(header_lines):
+        separator_start, separator_width = _recover_rule_separator_in_line(line)
+        if separator_start is not None:
+            return line_index, separator_start, separator_width
+    return None, 0, 0
+
+
+def _recover_rule_separator_in_line(line: str) -> tuple[int | None, int]:
     separator_index = line.find(":")
     if separator_index == -1:
         return None, 0
@@ -1506,20 +1605,31 @@ def _recover_rule_separator(line: str) -> tuple[int | None, int]:
     if separator_index > 0 and line[separator_index - 1] in "?+!":
         return None, 0
 
+    separator_start = separator_index
     separator_width = 2 if line[separator_index : separator_index + 2] == "::" else 1
-    return separator_index, separator_width
+    if separator_index > 0 and line[separator_index - 1] == "&":
+        separator_start -= 1
+        separator_width += 1
+
+    return separator_start, separator_width
 
 
 def _recover_prerequisites(
     header_lines: list[str],
-    separator_index: int,
+    separator_line_index: int,
+    separator_start: int,
     separator_width: int,
 ) -> tuple[str, ...]:
     prerequisites: list[str] = []
     for line_index, line in enumerate(header_lines):
-        text = line[separator_index + separator_width :] if line_index == 0 else line
+        if line_index < separator_line_index:
+            continue
+        if line_index == separator_line_index:
+            text = line[separator_start + separator_width :]
+        else:
+            text = line
         text = text.split(";", 1)[0]
-        if line_index == 0 and _is_target_specific_variable_assignment(text):
+        if line_index == separator_line_index and _is_target_specific_variable_assignment(text):
             return ()
         for match in TOKEN_RE.finditer(text):
             token = match.group(0)
@@ -1536,20 +1646,23 @@ def _recover_prerequisites(
 def _recover_prerequisite_occurrences(
     header_lines: list[str],
     start_line: int,
-    separator_index: int,
+    separator_line_index: int,
+    separator_start: int,
     separator_width: int,
     line_guards: dict[int, tuple[VariableGuard, ...]],
 ) -> list[SymbolOccurrence]:
     occurrences: list[SymbolOccurrence] = []
     for line_offset, line in enumerate(header_lines):
-        if line_offset == 0:
-            text = line[separator_index + separator_width :]
-            start_character = separator_index + separator_width
+        if line_offset < separator_line_index:
+            continue
+        if line_offset == separator_line_index:
+            text = line[separator_start + separator_width :]
+            start_character = separator_start + separator_width
         else:
             text = line
             start_character = 0
         text = text.split(";", 1)[0]
-        if line_offset == 0 and _is_target_specific_variable_assignment(text):
+        if line_offset == separator_line_index and _is_target_specific_variable_assignment(text):
             return []
         line_number = start_line + line_offset
 
@@ -1621,8 +1734,10 @@ def _recover_variable_references_from_text(
     return occurrences
 
 
-def _recover_include_directives(source_lines: list[str]) -> tuple[list[str], set[int]]:
-    includes: list[str] = []
+def _recover_include_directives(
+    source_lines: list[str],
+) -> tuple[list[_RecoveredInclude], set[int]]:
+    includes: list[_RecoveredInclude] = []
     parsed_lines: set[int] = set()
     in_define_block = False
     line_number = 0
@@ -1645,16 +1760,16 @@ def _recover_include_directives(source_lines: list[str]) -> tuple[list[str], set
             continue
 
         logical_end_line = _logical_top_level_end(source_lines, line_number)
-        recovered_include_paths = _recover_include_paths(
+        recovered_includes = _recover_include_paths(
             source_lines,
             line_number,
             logical_end_line,
         )
-        if not recovered_include_paths:
+        if not recovered_includes:
             line_number = logical_end_line + 1
             continue
 
-        includes.extend(recovered_include_paths)
+        includes.extend(recovered_includes)
         parsed_lines.update(range(line_number, logical_end_line + 1))
         line_number = logical_end_line + 1
 
@@ -1665,23 +1780,37 @@ def _recover_include_paths(
     source_lines: list[str],
     start_line: int,
     end_line: int,
-) -> tuple[str, ...]:
-    logical_parts: list[str] = []
+) -> tuple[_RecoveredInclude, ...]:
+    tokens: list[tuple[str, Span]] = []
     for line_number in range(start_line, end_line + 1):
-        text = _strip_make_comment(source_lines[line_number]).strip()
-        if line_number < end_line and text.endswith("\\"):
-            text = text[:-1].rstrip()
-        logical_parts.append(text)
+        text = _strip_make_comment(source_lines[line_number])
+        if line_number < end_line and _has_unescaped_line_continuation(text):
+            stripped = text.rstrip()
+            text = stripped[:-1]
 
-    logical_text = " ".join(part for part in logical_parts if part)
-    if logical_text == "":
+        for token in TOKEN_RE.finditer(text):
+            tokens.append(
+                (
+                    token.group(),
+                    Span(line_number, token.start(), line_number, token.end()),
+                )
+            )
+
+    if not tokens:
         return ()
 
-    first_token, _separator, remainder = logical_text.partition(" ")
-    if first_token not in INCLUDE_DIRECTIVES:
+    directive, _directive_span = tokens[0]
+    if directive not in INCLUDE_DIRECTIVES:
         return ()
 
-    return tuple(token for token in remainder.split() if token != "")
+    return tuple(
+        _RecoveredInclude(
+            path=token,
+            span=span,
+            optional=directive != "include",
+        )
+        for token, span in tokens[1:]
+    )
 
 
 def _strip_make_comment(text: str) -> str:
@@ -1914,7 +2043,7 @@ def _diagnostic_message(prefix: str, snippet: str) -> str:
 
     if len(compact_snippet) > 40:
         compact_snippet = compact_snippet[:37] + "..."
-    return f"{prefix} near `{compact_snippet}`"
+    return f"{prefix}: `{compact_snippet}`"
 
 
 def _render_target_hover(

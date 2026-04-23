@@ -206,8 +206,8 @@ def test_check_reports_diagnostics_for_positional_file_list(
     captured = capsys.readouterr()
     assert captured.err == ""
     assert captured.out.splitlines() == [
-        "defs:1:1: error: Invalid Makefile syntax near `all dep`",
-        "rules:1:1: error: Invalid Makefile syntax near `also bad`",
+        "defs:1:1: error: Invalid Makefile syntax: `all dep`",
+        "rules:1:1: error: Invalid Makefile syntax: `also bad`",
     ]
 
 
@@ -224,7 +224,7 @@ def test_check_reports_unresolved_prerequisite_warning(
     captured = capsys.readouterr()
     assert captured.err == ""
     assert captured.out.splitlines() == [
-        "Makefile:1:6: warning: Unresolved prerequisite near `dep`",
+        "Makefile:1:6: warning: Unresolved prerequisite: `dep`",
     ]
 
 

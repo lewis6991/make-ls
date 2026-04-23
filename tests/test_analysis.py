@@ -35,3 +35,42 @@ def test_analyze_document_recovers_contextual_symbol_sites() -> None:
     assert guarded_occurrence.context.active_guards == (
         VariableGuard("FEATURE", "nonempty"),
     )
+
+
+def test_analyze_document_recovers_grouped_targets_without_ampersand_target() -> None:
+    document = analyze_document(
+        "file:///Makefile",
+        None,
+        "out1 out2 &: dep\n\t@echo hi\n\ndep:\n\t@echo dep\n",
+    )
+
+    assert set(document.targets) == {"dep", "out1", "out2"}
+    assert "&" not in document.targets
+    assert document.targets["out1"][0].prerequisites == ("dep",)
+    assert document.targets["out2"][0].prerequisites == ("dep",)
+    assert document.diagnostics == ()
+
+
+def test_analyze_document_recovers_grouped_targets_with_late_separator() -> None:
+    document = analyze_document(
+        "file:///Makefile",
+        None,
+        (
+            "out1 \\\n"
+            "  out2 &: dep \\\n"
+            "  extra\n"
+            "\t@echo hi\n"
+            "\n"
+            "dep:\n"
+            "\t@echo dep\n"
+            "extra:\n"
+            "\t@echo extra\n"
+        ),
+    )
+
+    assert set(document.targets) == {"dep", "extra", "out1", "out2"}
+    assert document.targets["out1"][0].prerequisites == ("dep", "extra")
+    assert document.targets["out1"][0].name_span.start_line == 0
+    assert document.targets["out2"][0].prerequisites == ("dep", "extra")
+    assert document.targets["out2"][0].name_span.start_line == 1
+    assert document.diagnostics == ()

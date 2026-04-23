@@ -98,7 +98,7 @@ async def test_reports_makefile_syntax_diagnostics(tmp_path: Path) -> None:
         diagnostics = await session.wait_for_diagnostics(uri)
 
     assert len(diagnostics) == 1
-    assert diagnostics[0].message.startswith("Invalid Makefile syntax")
+    assert diagnostics[0].message == "Invalid Makefile syntax: `all dep`"
 
 
 @pytest.mark.asyncio
@@ -148,7 +148,7 @@ async def test_reports_unterminated_parenthesized_variable_reference_in_recovere
 
     assert len(diagnostics) == 1
     assert diagnostics[0].range.start.line == 0
-    assert diagnostics[0].message.startswith("Invalid variable reference in assignment")
+    assert diagnostics[0].message == "Invalid variable reference in assignment: `$(BAR`"
 
 
 @pytest.mark.asyncio
@@ -176,7 +176,7 @@ async def test_warns_for_unknown_variable_reference(tmp_path: Path) -> None:
 
     assert len(diagnostics) == 1
     assert diagnostics[0].severity == lsp.DiagnosticSeverity.Warning
-    assert diagnostics[0].message.startswith("Unknown variable reference")
+    assert diagnostics[0].message == "Unknown variable reference: `$(missing_var)`"
 
 
 @pytest.mark.asyncio
@@ -189,7 +189,7 @@ async def test_warns_for_unresolved_prerequisite(tmp_path: Path) -> None:
 
     assert len(diagnostics) == 1
     assert diagnostics[0].severity == lsp.DiagnosticSeverity.Warning
-    assert diagnostics[0].message.startswith("Unresolved prerequisite")
+    assert diagnostics[0].message == "Unresolved prerequisite: `dep`"
 
 
 @pytest.mark.asyncio
@@ -314,6 +314,43 @@ async def test_does_not_warn_for_target_specific_variable_assignment(tmp_path: P
 async def test_does_not_warn_for_included_target_prerequisite(tmp_path: Path) -> None:
     _ = (tmp_path / "rules.mk").write_text("dep:\n\t@echo dep\n", encoding="utf-8")
     text = "include rules.mk\n\nall: dep\n\t@echo done\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_warns_for_unresolved_include(tmp_path: Path) -> None:
+    text = "include missing.mk\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].range.start.line == 0
+    assert diagnostics[0].range.start.character == 8
+    assert diagnostics[0].severity == lsp.DiagnosticSeverity.Warning
+    assert diagnostics[0].message == "Unresolved include: `missing.mk`"
+
+
+@pytest.mark.asyncio
+async def test_does_not_warn_for_generated_include_target(tmp_path: Path) -> None:
+    text = "include deps.mk\n\ndeps.mk:\n\t@echo done\n"
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document("Makefile", text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_does_not_warn_for_optional_missing_include(tmp_path: Path) -> None:
+    text = "-include local.mk\n"
 
     async with LspSession(tmp_path) as session:
         uri = await session.open_document("Makefile", text)
@@ -517,7 +554,7 @@ async def test_reports_shell_syntax_diagnostics_for_recipe_lines(tmp_path: Path)
         diagnostics = await session.wait_for_diagnostics(uri)
 
     assert len(diagnostics) == 1
-    assert diagnostics[0].message.startswith("Invalid shell syntax in recipe")
+    assert diagnostics[0].message == "Invalid shell syntax in recipe: `if true; then echo hi`"
 
 
 @pytest.mark.asyncio
