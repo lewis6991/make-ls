@@ -74,3 +74,23 @@ def test_analyze_document_recovers_grouped_targets_with_late_separator() -> None
     assert document.targets["out2"][0].prerequisites == ("dep", "extra")
     assert document.targets["out2"][0].name_span.start_line == 1
     assert document.diagnostics == ()
+
+
+def test_analyze_document_allows_direct_recipe_local_eval_variables() -> None:
+    document = analyze_document(
+        "file:///Makefile",
+        None,
+        (
+            ".venv_%:\n"
+            "\t$(eval OS=$(word 1,$(subst _, ,$*)))\n"
+            "\t$(eval ARCH=$(word 2,$(subst _, ,$*)))\n"
+            "\tprintf '%s %s\\n' $(OS) $(ARCH)\n"
+            "\n"
+            "other:\n"
+            "\tprintf '%s\\n' $(OS)\n"
+        ),
+    )
+
+    assert len(document.diagnostics) == 1
+    assert document.diagnostics[0].message == "Unknown variable reference: `$(OS)`"
+    assert document.diagnostics[0].range.start.line == 6

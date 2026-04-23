@@ -92,6 +92,7 @@ class RecipeLine:
     raw_text: str
     command_text: str
     prefix_length: int
+    rule_start_line: int
 
 
 @dataclass(frozen=True, slots=True)

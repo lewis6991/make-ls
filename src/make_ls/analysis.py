@@ -50,6 +50,7 @@ VARIABLE_REFERENCE_RE = re.compile(
 MAKE_AUTOMATIC_VARIABLE_RE = re.compile(
     r"\$\(([@%<?^+*|][DF]?)\)|\$\{([@%<?^+*|][DF]?)\}|\$([@%<?^+*|])"
 )
+RECIPE_LOCAL_EVAL_RE = re.compile(r"^\$\(\s*eval\s+(?P<assignment>.+)\)\s*$")
 VARIABLE_REFERENCE_DELIMITERS = {"(": ")", "{": "}"}
 CONDITIONAL_DIRECTIVES = frozenset({"ifdef", "ifeq", "ifndef", "ifneq"})
 CONDITIONAL_CONTROL_DIRECTIVES = CONDITIONAL_DIRECTIVES | frozenset({"else", "endif"})
@@ -131,6 +132,7 @@ def analyze_document(
         source,
         variable_map,
         occurrences,
+        recipe_lines,
     )
     unresolved_include_diagnostics = _collect_unresolved_include_diagnostics(
         uri,
@@ -1087,12 +1089,20 @@ def _collect_unknown_variable_diagnostics(
     source: str,
     variable_map: dict[str, list[VariableDefinition]] | defaultdict[str, list[VariableDefinition]],
     occurrences: list[SymbolOccurrence],
+    recipe_lines: list[RecipeLine],
 ) -> list[lsp.Diagnostic]:
     diagnostics: list[lsp.Diagnostic] = []
+    recipe_local_variables = _recipe_local_eval_variables(recipe_lines)
     for occurrence in occurrences:
         if occurrence.kind != "variable" or occurrence.role != "reference":
             continue
         if occurrence.name in variable_map:
+            continue
+        if (
+            occurrence.context is not None
+            and occurrence.context.kind == "recipe"
+            and occurrence.name in recipe_local_variables.get(occurrence.span.start_line, ())
+        ):
             continue
         occurrence_text = _slice_text_span(source, occurrence.span)
         if not _should_warn_for_unknown_variable(
@@ -1161,6 +1171,35 @@ def _collect_unresolved_include_diagnostics(
         )
 
     return diagnostics
+
+
+def _recipe_local_eval_assignment_name(command_text: str) -> str | None:
+    match = RECIPE_LOCAL_EVAL_RE.match(command_text.strip())
+    if match is None:
+        return None
+
+    assignment_match = ASSIGNMENT_RE.match(match.group("assignment").strip())
+    if assignment_match is None:
+        return None
+    return assignment_match.group("name")
+
+
+def _recipe_local_eval_variables(recipe_lines: list[RecipeLine]) -> dict[int, frozenset[str]]:
+    variables_by_line: dict[int, frozenset[str]] = {}
+    current_rule_start_line: int | None = None
+    current_variables: set[str] = set()
+
+    for recipe_line in recipe_lines:
+        if recipe_line.rule_start_line != current_rule_start_line:
+            current_rule_start_line = recipe_line.rule_start_line
+            current_variables = set()
+
+        variables_by_line[recipe_line.span.start_line] = frozenset(current_variables)
+        assignment_name = _recipe_local_eval_assignment_name(recipe_line.command_text)
+        if assignment_name is not None:
+            current_variables.add(assignment_name)
+
+    return variables_by_line
 
 
 def _collect_unresolved_prerequisite_diagnostics(
@@ -1490,13 +1529,17 @@ def _recover_rule(
         next_line = source_lines[next_line_number]
         stripped_next_line = next_line.strip()
         if next_line.startswith("\t"):
-            recipe_line = _recipe_line_from_source(next_line_number, next_line)
+            recipe_line = _recipe_line_from_source(next_line_number, next_line, start_line)
             rule_recipe_lines.append(recipe_line)
             previous_recipe_continues = _has_unescaped_line_continuation(recipe_line.command_text)
             next_line_number += 1
             continue
         if previous_recipe_continues:
-            recipe_line = _continued_recipe_line_from_source(next_line_number, next_line)
+            recipe_line = _continued_recipe_line_from_source(
+                next_line_number,
+                next_line,
+                start_line,
+            )
             rule_recipe_lines.append(recipe_line)
             previous_recipe_continues = _has_unescaped_line_continuation(recipe_line.command_text)
             next_line_number += 1
@@ -1865,7 +1908,7 @@ def _rule_body_continues(source_lines: list[str], start_line: int) -> bool:
     return False
 
 
-def _recipe_line_from_source(line_number: int, raw_text: str) -> RecipeLine:
+def _recipe_line_from_source(line_number: int, raw_text: str, rule_start_line: int) -> RecipeLine:
     recipe_prefix_length = 1
     control_prefix_length, command_text = _strip_recipe_prefix(raw_text[recipe_prefix_length:])
     return RecipeLine(
@@ -1873,15 +1916,21 @@ def _recipe_line_from_source(line_number: int, raw_text: str) -> RecipeLine:
         raw_text=raw_text,
         command_text=command_text,
         prefix_length=recipe_prefix_length + control_prefix_length,
+        rule_start_line=rule_start_line,
     )
 
 
-def _continued_recipe_line_from_source(line_number: int, raw_text: str) -> RecipeLine:
+def _continued_recipe_line_from_source(
+    line_number: int,
+    raw_text: str,
+    rule_start_line: int,
+) -> RecipeLine:
     return RecipeLine(
         span=Span(line_number, 0, line_number, len(raw_text)),
         raw_text=raw_text,
         command_text=raw_text,
         prefix_length=0,
+        rule_start_line=rule_start_line,
     )
 
 
