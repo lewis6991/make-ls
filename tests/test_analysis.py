@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from make_ls.analysis import analyze_document
-from make_ls.types import VariableGuard
+from make_ls.types import VarGuard
 
 
 def test_analyze_document_recovers_contextual_symbol_sites() -> None:
@@ -32,9 +32,7 @@ def test_analyze_document_recovers_contextual_symbol_sites() -> None:
     assert guarded_occurrence.context is not None
     assert guarded_occurrence.context.form_kind == "assignment"
     assert guarded_occurrence.context.kind == "assignment_value"
-    assert guarded_occurrence.context.active_guards == (
-        VariableGuard("FEATURE", "nonempty"),
-    )
+    assert guarded_occurrence.context.active_guards == (VarGuard("FEATURE", "nonempty"),)
 
 
 def test_analyze_document_recovers_grouped_targets_without_ampersand_target() -> None:

@@ -6,9 +6,9 @@ from typing import Literal
 from lsprotocol import types as lsp
 
 FormKind = Literal["assignment", "conditional", "rule"]
-SymbolKind = Literal["target", "variable"]
-SymbolRole = Literal["definition", "reference"]
-SymbolContextKind = Literal[
+SymKind = Literal["target", "variable"]
+SymRole = Literal["definition", "reference"]
+SymCtxKind = Literal[
     "assignment_definition",
     "assignment_value",
     "conditional_test",
@@ -16,7 +16,7 @@ SymbolContextKind = Literal[
     "recipe",
     "target_definition",
 ]
-VariableGuardKind = Literal["defined", "empty", "nonempty", "undefined"]
+VarGuardKind = Literal["defined", "empty", "nonempty", "undefined"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +39,7 @@ class Span:
 
 
 @dataclass(frozen=True, slots=True)
-class TargetDefinition:
+class TargetDef:
     name: str
     name_span: Span
     rule_span: Span
@@ -49,7 +49,7 @@ class TargetDefinition:
 
 
 @dataclass(frozen=True, slots=True)
-class VariableDefinition:
+class VarDef:
     name: str
     name_span: Span
     assignment_span: Span
@@ -59,31 +59,31 @@ class VariableDefinition:
 
 
 @dataclass(frozen=True, slots=True)
-class VariableGuard:
+class VarGuard:
     name: str
-    kind: VariableGuardKind
+    kind: VarGuardKind
 
 
 @dataclass(frozen=True, slots=True)
-class SymbolContext:
+class SymCtx:
     form_kind: FormKind
-    kind: SymbolContextKind
-    active_guards: tuple[VariableGuard, ...] = ()
+    kind: SymCtxKind
+    active_guards: tuple[VarGuard, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
-class DocumentForm:
+class DocForm:
     kind: FormKind
     span: Span
 
 
 @dataclass(frozen=True, slots=True)
-class SymbolOccurrence:
-    kind: SymbolKind
-    role: SymbolRole
+class SymOcc:
+    kind: SymKind
+    role: SymRole
     name: str
     span: Span
-    context: SymbolContext | None = None
+    context: SymCtx | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,18 +96,18 @@ class RecipeLine:
 
 
 @dataclass(frozen=True, slots=True)
-class AnalyzedDocument:
+class AnalyzedDoc:
     uri: str
     version: int | None
-    targets: dict[str, tuple[TargetDefinition, ...]]
-    variables: dict[str, tuple[VariableDefinition, ...]]
+    targets: dict[str, tuple[TargetDef, ...]]
+    variables: dict[str, tuple[VarDef, ...]]
     includes: tuple[str, ...]
     phony_targets: frozenset[str]
-    occurrences: tuple[SymbolOccurrence, ...]
-    forms: tuple[DocumentForm, ...]
+    occurrences: tuple[SymOcc, ...]
+    forms: tuple[DocForm, ...]
     diagnostics: tuple[lsp.Diagnostic, ...]
 
-    def occurrence_at(self, line: int, character: int) -> SymbolOccurrence | None:
+    def occurrence_at(self, line: int, character: int) -> SymOcc | None:
         for occurrence in self.occurrences:
             if occurrence.span.contains(line, character):
                 return occurrence

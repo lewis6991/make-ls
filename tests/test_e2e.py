@@ -9,7 +9,7 @@ import pytest
 from lsprotocol import types as lsp
 
 from make_ls import __main__ as cli
-from make_ls.types import AnalyzedDocument
+from make_ls.types import AnalyzedDoc
 
 from .lsp_harness import LspSession
 
@@ -1266,7 +1266,7 @@ async def test_hover_for_local_target_does_not_follow_includes(
         uri = await session.open_document("Makefile", text)
         _ = await session.wait_for_diagnostics(uri)
 
-        def fail_included_documents(_uri: str) -> tuple[AnalyzedDocument, ...]:
+        def fail_included_documents(_uri: str) -> tuple[AnalyzedDoc, ...]:
             raise AssertionError("local hover should not follow includes")
 
         monkeypatch.setattr(session.server, "included_documents", fail_included_documents)

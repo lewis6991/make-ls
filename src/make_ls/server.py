@@ -14,13 +14,13 @@ from .analysis import (
     UNKNOWN_VARIABLE_DIAGNOSTIC_CODE,
     UNRESOLVED_PREREQUISITE_DIAGNOSTIC_CODE,
     analyze_document,
-    definition_for_position,
-    hover_for_position,
-    prepare_rename_for_position,
-    references_for_position,
-    rename_variable_for_position,
+    def_for_pos,
+    hover_for_pos,
+    prep_rename_for_pos,
+    refs_for_pos,
+    rename_var_for_pos,
 )
-from .types import AnalyzedDocument, SymbolOccurrence
+from .types import AnalyzedDoc, SymOcc
 
 LOGGER = logging.getLogger(__name__)
 
@@ -35,10 +35,10 @@ def _server_version() -> str:
 class MakeLsLanguageServer(LanguageServer):
     def __init__(self) -> None:
         super().__init__("make-ls", _server_version())  # pyright: ignore[reportUnknownMemberType]
-        self._documents: dict[str, AnalyzedDocument] = {}
+        self._documents: dict[str, AnalyzedDoc] = {}
         self._disk_signatures: dict[str, tuple[int, int]] = {}
 
-    def analyze_uri(self, uri: str) -> AnalyzedDocument:
+    def analyze_uri(self, uri: str) -> AnalyzedDoc:
         document = self.workspace.get_text_document(uri)
         cached = self._documents.get(uri)
         if cached is not None and cached.version == document.version:
@@ -55,7 +55,7 @@ class MakeLsLanguageServer(LanguageServer):
         self._documents[uri] = analyzed
         return analyzed
 
-    def analyze_path(self, path: Path) -> AnalyzedDocument:
+    def analyze_path(self, path: Path) -> AnalyzedDoc:
         uri = path.as_uri()
         if uri in self.workspace.text_documents:
             return self.analyze_uri(uri)
@@ -79,10 +79,10 @@ class MakeLsLanguageServer(LanguageServer):
         self._disk_signatures[uri] = signature
         return analyzed
 
-    def included_documents(self, uri: str) -> tuple[AnalyzedDocument, ...]:
+    def included_documents(self, uri: str) -> tuple[AnalyzedDoc, ...]:
         current_document = self.analyze_uri(uri)
         current_path = _path_from_uri(uri)
-        related_documents: list[AnalyzedDocument] = []
+        related_documents: list[AnalyzedDoc] = []
         seen_paths = {current_path.resolve()}
         include_paths = _resolved_include_paths(current_path.parent, current_document.includes)
         for candidate_path in include_paths:
@@ -97,7 +97,7 @@ class MakeLsLanguageServer(LanguageServer):
         self,
         path: Path,
         seen_paths: set[Path],
-        related_documents: list[AnalyzedDocument],
+        related_documents: list[AnalyzedDoc],
     ) -> None:
         resolved_path = path.resolve()
         if resolved_path in seen_paths:
@@ -171,9 +171,7 @@ def create_server() -> MakeLsLanguageServer:
             include_shell_diagnostics=True,
         )
 
-    _ = server.feature(lsp.TEXT_DOCUMENT_DID_SAVE, lsp.SaveOptions(include_text=False))(
-        did_save
-    )
+    _ = server.feature(lsp.TEXT_DOCUMENT_DID_SAVE, lsp.SaveOptions(include_text=False))(did_save)
 
     def did_close(ls: MakeLsLanguageServer, params: lsp.DidCloseTextDocumentParams) -> None:
         LOGGER.debug("textDocument/didClose uri=%s", params.text_document.uri)
@@ -188,7 +186,7 @@ def create_server() -> MakeLsLanguageServer:
         document = ls.analyze_uri(params.text_document.uri)
         text_document = ls.workspace.get_text_document(params.text_document.uri)
         source_lines = tuple(text_document.source.splitlines())
-        hover_result = hover_for_position(
+        hover_result = hover_for_pos(
             document,
             params.position,
             source_lines=source_lines,
@@ -203,7 +201,7 @@ def create_server() -> MakeLsLanguageServer:
             return hover_result
 
         documents = ls.included_documents(params.text_document.uri)
-        hover_result = hover_for_position(document, params.position, documents[1:], source_lines)
+        hover_result = hover_for_pos(document, params.position, documents[1:], source_lines)
         LOGGER.debug(
             "textDocument/hover uri=%s position=%d:%d result=%s includes=%d",
             params.text_document.uri,
@@ -220,7 +218,7 @@ def create_server() -> MakeLsLanguageServer:
         ls: MakeLsLanguageServer, params: lsp.DefinitionParams
     ) -> lsp.Location | list[lsp.Location] | None:
         document = ls.analyze_uri(params.text_document.uri)
-        local_definition = definition_for_position(document, params.position)
+        local_definition = def_for_pos(document, params.position)
         if local_definition is not None:
             LOGGER.debug(
                 "textDocument/definition uri=%s position=%d:%d result=local locations=%d",
@@ -232,7 +230,7 @@ def create_server() -> MakeLsLanguageServer:
             return local_definition
 
         documents = ls.included_documents(params.text_document.uri)
-        definition_result = definition_for_position(document, params.position, documents[1:])
+        definition_result = def_for_pos(document, params.position, documents[1:])
         LOGGER.debug(
             "textDocument/definition uri=%s position=%d:%d result=%s locations=%d includes=%d",
             params.text_document.uri,
@@ -241,7 +239,9 @@ def create_server() -> MakeLsLanguageServer:
             "included" if definition_result is not None else "miss",
             0
             if definition_result is None
-            else 1 if isinstance(definition_result, lsp.Location) else len(definition_result),
+            else 1
+            if isinstance(definition_result, lsp.Location)
+            else len(definition_result),
             len(documents) - 1,
         )
         return definition_result
@@ -254,11 +254,11 @@ def create_server() -> MakeLsLanguageServer:
         document = ls.analyze_uri(params.text_document.uri)
         text_document = ls.workspace.get_text_document(params.text_document.uri)
         occurrence = document.occurrence_at(params.position.line, params.position.character)
-        related_documents: tuple[AnalyzedDocument, ...] = ()
+        related_documents: tuple[AnalyzedDoc, ...] = ()
         if occurrence is not None and occurrence.kind == "target":
             related_documents = ls.included_documents(params.text_document.uri)[1:]
 
-        reference_result = references_for_position(
+        reference_result = refs_for_pos(
             document,
             params.position,
             tuple(text_document.source.splitlines()),
@@ -284,7 +284,7 @@ def create_server() -> MakeLsLanguageServer:
     ) -> lsp.PrepareRenameResult | None:
         document = ls.analyze_uri(params.text_document.uri)
         text_document = ls.workspace.get_text_document(params.text_document.uri)
-        rename_result = prepare_rename_for_position(
+        rename_result = prep_rename_for_pos(
             document,
             params.position,
             tuple(text_document.source.splitlines()),
@@ -303,7 +303,7 @@ def create_server() -> MakeLsLanguageServer:
     def rename(ls: MakeLsLanguageServer, params: lsp.RenameParams) -> lsp.WorkspaceEdit | None:
         document = ls.analyze_uri(params.text_document.uri)
         text_document = ls.workspace.get_text_document(params.text_document.uri)
-        workspace_edit = rename_variable_for_position(
+        workspace_edit = rename_var_for_pos(
             document,
             params.position,
             params.new_name,
@@ -417,7 +417,7 @@ def _supports_snippet_workspace_edits(capabilities: lsp.ClientCapabilities) -> b
 
 
 def _unknown_variable_code_actions(
-    document: AnalyzedDocument,
+    document: AnalyzedDoc,
     uri: str,
     diagnostics: Sequence[lsp.Diagnostic],
 ) -> list[lsp.CodeAction]:
@@ -466,7 +466,7 @@ def _unknown_variable_code_actions(
 
 
 def _unresolved_prerequisite_code_actions(
-    document: AnalyzedDocument,
+    document: AnalyzedDoc,
     uri: str,
     source: str,
     supports_snippet_workspace_edits: bool,
@@ -509,8 +509,8 @@ def _unresolved_prerequisite_code_actions(
 
 
 def _empty_assignment_insertion_line(
-    document: AnalyzedDocument,
-    occurrence: SymbolOccurrence,
+    document: AnalyzedDoc,
+    occurrence: SymOcc,
 ) -> int:
     if occurrence.context is None:
         return occurrence.span.start_line
@@ -549,9 +549,7 @@ def _target_template_workspace_edit(
                     edits=[
                         lsp.SnippetTextEdit(
                             range=insert_range,
-                            snippet=lsp.StringValue(
-                                f"{prefix}{target_name}:\n\t# ${{1:TODO}}\n"
-                            ),
+                            snippet=lsp.StringValue(f"{prefix}{target_name}:\n\t# ${{1:TODO}}\n"),
                         )
                     ],
                 )
