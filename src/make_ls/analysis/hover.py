@@ -12,18 +12,19 @@ from typing import TYPE_CHECKING
 
 from lsprotocol import types as lsp
 
-from . import _analysis_navigation as navigation
-from .builtin_docs import (
+from make_ls.builtin_docs import (
     BUILTIN_VARIABLE_DOCS,
     DIRECTIVE_DOCS,
     FUNCTION_DOCS,
     SPECIAL_TARGET_DOCS,
 )
-from .types import Span
+from make_ls.types import Span
+
+from .navigation import pattern_target_definitions, resolve_variable_definition
 
 if TYPE_CHECKING:
-    from .builtin_docs import BuiltinDoc
-    from .types import AnalyzedDoc, TargetDef, VarDef
+    from make_ls.builtin_docs import BuiltinDoc
+    from make_ls.types import AnalyzedDoc, TargetDef, VarDef
 
 BUILTIN_DIRECTIVE_TOKEN_RE = re.compile(r'-?[A-Za-z][A-Za-z0-9-]*')
 BUILTIN_FUNCTION_NAME_RE = re.compile(r'[A-Za-z][A-Za-z0-9-]*')
@@ -77,7 +78,7 @@ def hover_for_pos(
             range=occurrence.span.to_lsp_range(),
         )
 
-    definition = navigation.resolve_variable_definition(
+    definition = resolve_variable_definition(
         document,
         occurrence.name,
         occurrence.span.start_line,
@@ -236,7 +237,7 @@ def _hover_target_definitions(
     if local_definitions:
         return tuple((document, definition) for definition in local_definitions)
 
-    local_pattern_definitions = navigation.pattern_target_definitions(document, name)
+    local_pattern_definitions = pattern_target_definitions(document, name)
     if local_pattern_definitions:
         return tuple((document, definition) for definition in local_pattern_definitions)
 
@@ -248,7 +249,7 @@ def _hover_target_definitions(
         matching_documents.append((related_document, related_definitions))
     if not matching_documents:
         for related_document in related_documents:
-            related_definitions = navigation.pattern_target_definitions(related_document, name)
+            related_definitions = pattern_target_definitions(related_document, name)
             if not related_definitions:
                 continue
             matching_documents.append((related_document, related_definitions))

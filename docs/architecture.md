@@ -11,18 +11,20 @@ stays at the repo-shape level so it does not duplicate them.
 - `src/make_ls/__main__.py`: CLI entrypoints for stdio LSP mode and batch
   checking
 - `src/make_ls/types.py`: shared recovered model centered on `AnalyzedDoc`
-- `src/make_ls/analysis.py`: pipeline coordinator that builds one analyzed
-  document snapshot
-- `src/make_ls/_analysis_recovery.py`: recovery passes for conditionals,
+- `src/make_ls/analysis/__init__.py`: pipeline coordinator that builds one
+  analyzed document snapshot
+- `src/make_ls/analysis/recovery.py`: recovery passes for conditionals,
   includes, rules, and assignments
-- `src/make_ls/_analysis_diagnostics.py`: diagnostic passes over the recovered
-  model
-- `src/make_ls/_analysis_completion.py`: completion over recovered symbols plus
+- `src/make_ls/analysis/diagnostics/*.py`: one diagnostic pass per module over
+  the recovered model
+- `src/make_ls/analysis/completion.py`: completion over recovered symbols plus
   lightweight line-context detection
-- `src/make_ls/server.py`: LSP server wiring, caches, and included-document
+- `src/make_ls/analysis/hover.py`: hover rendering and builtin GNU Make docs
+- `src/make_ls/analysis/navigation.py`: definition, references, and rename
+- `src/make_ls/lsp/server.py`: LSP server state, caches, and included-document
   traversal
-- `src/make_ls/_analysis_hover.py`: hover rendering and builtin GNU Make docs
-- `src/make_ls/_analysis_navigation.py`: definition, references, and rename
+- `src/make_ls/lsp/features/*.py`: per-feature LSP handlers wired by the server
+- `src/make_ls/server.py`: compatibility wrapper for the packaged LSP server
 
 ## Tests
 

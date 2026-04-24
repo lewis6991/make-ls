@@ -14,54 +14,22 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import TYPE_CHECKING
 
-from ._analysis_completion import complete_for_pos
-from ._analysis_diagnostics import (
-    UNKNOWN_VARIABLE_DIAGNOSTIC_CODE,
-    UNRESOLVED_INCLUDE_DIAGNOSTIC_CODE,
-    UNRESOLVED_PREREQUISITE_DIAGNOSTIC_CODE,
-    collect_automatic_variable_diagnostics,
-    collect_circular_prerequisite_diagnostics,
-    collect_control_block_diagnostics,
-    collect_make_syntax_diagnostics,
-    collect_overriding_recipe_diagnostics,
-    collect_shell_diagnostics,
-    collect_unknown_variable_diagnostics,
-    collect_unresolved_include_diagnostics,
-    collect_unresolved_prerequisite_diagnostics,
-)
-from ._analysis_hover import hover_for_pos
-from ._analysis_navigation import (
-    def_for_pos,
-    prep_rename_for_pos,
-    refs_for_pos,
-    rename_var_for_pos,
-    resolve_variable_definition,
-)
-from ._analysis_recovery import (
+from make_ls.types import AnalyzedDoc
+
+from .diagnostics import collect_diagnostics
+from .diagnostics.base import DiagnosticContext
+from .recovery import (
     declared_phony_targets,
     recover_conditionals,
     recover_include_directives,
     recover_rules,
     recover_variable_assignments,
 )
-from .types import AnalyzedDoc
 
 if TYPE_CHECKING:
-    from .types import SymOcc, TargetDef, VarDef
+    from make_ls.types import SymOcc, TargetDef, VarDef
 
-__all__ = [
-    'UNKNOWN_VARIABLE_DIAGNOSTIC_CODE',
-    'UNRESOLVED_INCLUDE_DIAGNOSTIC_CODE',
-    'UNRESOLVED_PREREQUISITE_DIAGNOSTIC_CODE',
-    'analyze_document',
-    'complete_for_pos',
-    'def_for_pos',
-    'hover_for_pos',
-    'prep_rename_for_pos',
-    'refs_for_pos',
-    'rename_var_for_pos',
-    'resolve_variable_definition',
-]
+__all__ = ['analyze_document']
 
 
 def analyze_document(
@@ -97,68 +65,49 @@ def analyze_document(
     _record_occs(occurrences, rule_recovery.occurrences)
     _record_occs(occurrences, assignment_recovery.occurrences)
 
-    target_names = set(target_map)
+    targets = {name: tuple(definitions) for name, definitions in target_map.items()}
+    variables = {name: tuple(definitions) for name, definitions in variable_map.items()}
+    target_names = frozenset(targets)
+    phony_target_names = frozenset(phony_targets)
+    document_occurrences = tuple(occurrences)
     include_patterns = tuple(include.path for include in include_recovery.includes)
-
-    control_block_diagnostics = collect_control_block_diagnostics(source_lines)
-    make_diagnostics = collect_make_syntax_diagnostics(
-        source_lines,
-        parsed_lines=(
-            rule_recovery.parsed_lines
-            | assignment_recovery.parsed_lines
-            | include_recovery.parsed_lines
-        ),
+    parsed_lines = frozenset(
+        rule_recovery.parsed_lines
+        | assignment_recovery.parsed_lines
+        | include_recovery.parsed_lines
     )
-    unknown_variable_diagnostics = collect_unknown_variable_diagnostics(
-        source,
-        variable_map,
-        occurrences,
-        rule_recovery.recipe_lines,
+    diagnostic_context = DiagnosticContext(
+        uri=uri,
+        source=source,
+        source_lines=source_lines,
+        target_map=targets,
+        variable_map=variables,
+        target_names=target_names,
+        phony_targets=phony_target_names,
+        occurrences=document_occurrences,
+        includes=include_recovery.includes,
+        include_patterns=include_patterns,
+        parsed_lines=parsed_lines,
+        recipe_lines=rule_recovery.recipe_lines,
+        assignment_diagnostics=assignment_recovery.diagnostics,
+        include_shell_diagnostics=include_shell_diagnostics,
     )
-    automatic_variable_diagnostics = collect_automatic_variable_diagnostics(source, occurrences)
-    unresolved_include_diagnostics = collect_unresolved_include_diagnostics(
-        uri,
-        include_recovery.includes,
-        target_names,
-    )
-    unresolved_prerequisite_diagnostics = collect_unresolved_prerequisite_diagnostics(
-        uri,
-        occurrences,
-        target_names,
-        phony_targets,
-        include_patterns,
-    )
-    overriding_recipe_diagnostics = collect_overriding_recipe_diagnostics(target_map)
-    circular_prerequisite_diagnostics = collect_circular_prerequisite_diagnostics(target_map)
-    shell_diagnostics = (
-        collect_shell_diagnostics(rule_recovery.recipe_lines) if include_shell_diagnostics else []
-    )
+    diagnostics = collect_diagnostics(diagnostic_context)
 
     return AnalyzedDoc(
         uri=uri,
         version=version,
-        targets={name: tuple(definitions) for name, definitions in target_map.items()},
-        variables={name: tuple(definitions) for name, definitions in variable_map.items()},
+        targets=targets,
+        variables=variables,
         includes=include_patterns,
-        phony_targets=frozenset(phony_targets),
-        occurrences=tuple(occurrences),
+        phony_targets=phony_target_names,
+        occurrences=document_occurrences,
         forms=(
             *conditional_recovery.forms,
             *rule_recovery.forms,
             *assignment_recovery.forms,
         ),
-        diagnostics=(
-            *control_block_diagnostics,
-            *make_diagnostics,
-            *assignment_recovery.diagnostics,
-            *unknown_variable_diagnostics,
-            *automatic_variable_diagnostics,
-            *unresolved_include_diagnostics,
-            *unresolved_prerequisite_diagnostics,
-            *overriding_recipe_diagnostics,
-            *circular_prerequisite_diagnostics,
-            *shell_diagnostics,
-        ),
+        diagnostics=diagnostics,
     )
 
 

@@ -11,11 +11,12 @@ from typing import TYPE_CHECKING
 
 from lsprotocol import types as lsp
 
-from . import _analysis_recovery as recovery
-from .types import Span
+from make_ls.types import Span
+
+from .recovery import VARIABLE_NAME_RE
 
 if TYPE_CHECKING:
-    from .types import AnalyzedDoc, SymOcc, TargetDef, VarDef
+    from make_ls.types import AnalyzedDoc, SymOcc, TargetDef, VarDef
 
 
 def def_for_pos(
@@ -126,7 +127,7 @@ def rename_var_for_pos(
         return None
     if not _is_renameable_variable_occurrence(document, occurrence):
         return None
-    if recovery.VARIABLE_NAME_RE.fullmatch(new_name) is None:
+    if VARIABLE_NAME_RE.fullmatch(new_name) is None:
         return None
 
     edits: list[lsp.TextEdit] = []

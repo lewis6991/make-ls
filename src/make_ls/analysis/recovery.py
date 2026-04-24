@@ -12,20 +12,11 @@ from typing import TYPE_CHECKING
 
 from lsprotocol import types as lsp
 
-from .builtin_docs import DIRECTIVE_DOCS
-from .types import (
-    DocForm,
-    RecipeLine,
-    Span,
-    SymCtx,
-    SymOcc,
-    TargetDef,
-    VarDef,
-    VarGuard,
-)
+from make_ls.builtin_docs import DIRECTIVE_DOCS
+from make_ls.types import DocForm, RecipeLine, Span, SymCtx, SymOcc, TargetDef, VarDef, VarGuard
 
 if TYPE_CHECKING:
-    from .types import FormKind, SymCtxKind
+    from make_ls.types import FormKind, SymCtxKind
 
 COMMENT_RE = re.compile(r'^[ ]*#(?P<text>.*)$')
 TOKEN_RE = re.compile(r'\S+')
@@ -48,6 +39,9 @@ RULE_DIRECTIVES = frozenset(DIRECTIVE_DOCS)
 INCLUDE_DIRECTIVES = frozenset({'include', '-include', 'sinclude'})
 VARIABLE_NAME_RE = re.compile(r'^[A-Za-z0-9_.%/@+-]+$')
 EMPTY_CONDITIONAL_ARGUMENTS = frozenset({'', '""', "''"})
+INVALID_VARIABLE_REFERENCE_IN_ASSIGNMENT_DIAGNOSTIC_CODE = (
+    'invalid-variable-reference-in-assignment'
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1126,6 +1120,7 @@ def _recover_assignment_value_diagnostics(
                 'Invalid variable reference in assignment',
                 value[reference_start:],
             ),
+            code=INVALID_VARIABLE_REFERENCE_IN_ASSIGNMENT_DIAGNOSTIC_CODE,
             severity=lsp.DiagnosticSeverity.Error,
             source='make-ls',
         )

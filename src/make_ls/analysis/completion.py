@@ -12,18 +12,19 @@ from typing import TYPE_CHECKING
 
 from lsprotocol import types as lsp
 
-from . import _analysis_navigation as navigation
-from . import _analysis_recovery as recovery
-from .builtin_docs import BUILTIN_VARIABLE_DOCS, DIRECTIVE_DOCS, FUNCTION_DOCS
+from make_ls.builtin_docs import BUILTIN_VARIABLE_DOCS, DIRECTIVE_DOCS, FUNCTION_DOCS
+
+from .navigation import resolve_variable_definition
+from .recovery import ASSIGNMENT_RE, CONDITIONAL_DIRECTIVES, VARIABLE_REFERENCE_DELIMITERS
 
 if TYPE_CHECKING:
-    from .builtin_docs import BuiltinDoc
-    from .types import AnalyzedDoc, SymOcc, VarDef
+    from make_ls.builtin_docs import BuiltinDoc
+    from make_ls.types import AnalyzedDoc, SymOcc, VarDef
 
 DIRECTIVE_NAMES = tuple(sorted(DIRECTIVE_DOCS))
 FUNCTION_NAMES = tuple(sorted(FUNCTION_DOCS))
 SECOND_TOKEN_DIRECTIVES = {
-    'else': tuple(sorted(recovery.CONDITIONAL_DIRECTIVES)),
+    'else': tuple(sorted(CONDITIONAL_DIRECTIVES)),
     'override': ('define',),
 }
 DIRECTIVE_NAME_CHARACTERS = frozenset(
@@ -87,7 +88,7 @@ def _variable_completion_context(line_text: str, character: int) -> _CompletionC
                 index += 2
                 continue
 
-            expected_closer = recovery.VARIABLE_REFERENCE_DELIMITERS.get(next_character)
+            expected_closer = VARIABLE_REFERENCE_DELIMITERS.get(next_character)
             if expected_closer is not None:
                 open_references.append((index, expected_closer))
                 index += 2
@@ -262,7 +263,7 @@ def _variable_completion_items(
         name for name in sorted(document.variables) if name.startswith(context.prefix)
     ]
     for index, name in enumerate(local_variable_names):
-        definition = navigation.resolve_variable_definition(
+        definition = resolve_variable_definition(
             document,
             name,
             position.line,
@@ -451,7 +452,7 @@ def _rule_separator_in_line(line: str) -> tuple[int | None, int]:
 
 def _is_target_specific_variable_assignment(text: str) -> bool:
     stripped = text.strip()
-    return stripped != '' and recovery.ASSIGNMENT_RE.fullmatch(stripped) is not None
+    return stripped != '' and ASSIGNMENT_RE.fullmatch(stripped) is not None
 
 
 def _is_target_completion_character(character: str) -> bool:
