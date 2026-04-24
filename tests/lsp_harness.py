@@ -158,6 +158,19 @@ class LspSession:
             )
         )
 
+    async def completion(self, uri: str, line: int, character: int) -> list[lsp.CompletionItem]:
+        result = await self.client.text_document_completion_async(
+            lsp.CompletionParams(
+                text_document=lsp.TextDocumentIdentifier(uri=uri),
+                position=lsp.Position(line=line, character=character),
+            )
+        )
+        if result is None:
+            return []
+        if isinstance(result, lsp.CompletionList):
+            return list(result.items)
+        return list(result)
+
     async def definition(
         self, uri: str, line: int, character: int
     ) -> lsp.Location | list[lsp.Location] | None:

@@ -10,6 +10,8 @@ diagnostics and symbol understanding stay close across editor and CLI use.
 
 - hover for targets, variables, GNU Make directives, functions, builtin
   variables, and special targets
+- completion for GNU Make directives, functions, variables, and prerequisite
+  targets
 - go to definition for targets and variables
 - references for targets and variables
 - variable rename with prepare-rename support
@@ -22,11 +24,14 @@ diagnostics and symbol understanding stay close across editor and CLI use.
 - nested static includes for target lookup
 - pattern rules for target definition lookup
 - leading comment blocks on variable assignments for variable hover docs
+- local variable definitions and builtin GNU Make names for completion
 - recursive target dependency trees in target hover
 
 ### Current limits
 
-- no completion yet
+- variable completion stays within the current document
+- target completion only runs in prerequisite lists and only follows static
+  includes
 - variable rename is variable-only and stays within the current document
 - target lookup through includes only works for static include paths
 - no full GNU Make evaluation

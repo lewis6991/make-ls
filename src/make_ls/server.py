@@ -21,6 +21,7 @@ from .analysis import (
     UNKNOWN_VARIABLE_DIAGNOSTIC_CODE,
     UNRESOLVED_PREREQUISITE_DIAGNOSTIC_CODE,
     analyze_document,
+    complete_for_pos,
     def_for_pos,
     hover_for_pos,
     prep_rename_for_pos,
@@ -231,6 +232,34 @@ def create_server() -> MakeLsLanguageServer:
         return hover_result
 
     _ = server.feature(lsp.TEXT_DOCUMENT_HOVER)(hover)
+
+    def completion(
+        ls: MakeLsLanguageServer, params: lsp.CompletionParams
+    ) -> list[lsp.CompletionItem] | None:
+        document = ls.analyze_uri(params.text_document.uri)
+        text_document = ls.workspace.get_text_document(params.text_document.uri)
+        source_lines = tuple(text_document.source.splitlines())
+        related_documents = ls.included_documents(params.text_document.uri)[1:]
+        completion_items = complete_for_pos(
+            document,
+            params.position,
+            source_lines,
+            related_documents,
+        )
+        LOGGER.debug(
+            'textDocument/completion uri=%s position=%d:%d items=%d includes=%d',
+            params.text_document.uri,
+            params.position.line + 1,
+            params.position.character + 1,
+            0 if completion_items is None else len(completion_items),
+            len(related_documents),
+        )
+        return completion_items
+
+    _ = server.feature(
+        lsp.TEXT_DOCUMENT_COMPLETION,
+        lsp.CompletionOptions(trigger_characters=['$', '(', '{', ':']),
+    )(completion)
 
     def definition(
         ls: MakeLsLanguageServer, params: lsp.DefinitionParams

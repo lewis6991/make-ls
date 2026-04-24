@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import TYPE_CHECKING
 
+from ._analysis_completion import complete_for_pos
 from ._analysis_diagnostics import (
     UNKNOWN_VARIABLE_DIAGNOSTIC_CODE,
     UNRESOLVED_INCLUDE_DIAGNOSTIC_CODE,
@@ -53,6 +54,7 @@ __all__ = [
     'UNRESOLVED_INCLUDE_DIAGNOSTIC_CODE',
     'UNRESOLVED_PREREQUISITE_DIAGNOSTIC_CODE',
     'analyze_document',
+    'complete_for_pos',
     'def_for_pos',
     'hover_for_pos',
     'prep_rename_for_pos',
