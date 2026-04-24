@@ -20,7 +20,10 @@ from make_ls.builtin_docs import (
 )
 from make_ls.types import Span
 
-from .navigation import pattern_target_definitions, resolve_variable_definition
+from .navigation import (
+    pattern_target_definitions,
+    resolve_related_variable_definition,
+)
 
 if TYPE_CHECKING:
     from make_ls.builtin_docs import BuiltinDoc
@@ -78,17 +81,19 @@ def hover_for_pos(
             range=occurrence.span.to_lsp_range(),
         )
 
-    definition = resolve_variable_definition(
+    definition_result = resolve_related_variable_definition(
         document,
         occurrence.name,
         occurrence.span.start_line,
         occurrence.span.start_character,
+        related_documents,
     )
-    if definition is None:
+    if definition_result is None:
         builtin_variable_doc = BUILTIN_VARIABLE_DOCS.get(occurrence.name)
         if builtin_variable_doc is None:
             return None
         return _render_builtin_hover_result(occurrence.span, builtin_variable_doc)
+    _definition_document, definition = definition_result
 
     return lsp.Hover(
         contents=lsp.MarkupContent(

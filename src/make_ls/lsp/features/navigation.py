@@ -67,7 +67,7 @@ def references(ls: FeatureServer, params: lsp.ReferenceParams) -> list[lsp.Locat
     text_document = workspace.get_text_document(params.text_document.uri)
     occurrence = document.occurrence_at(params.position.line, params.position.character)
     related_documents: tuple[AnalyzedDoc, ...] = ()
-    if occurrence is not None and occurrence.kind == 'target':
+    if occurrence is not None and occurrence.kind in {'target', 'variable'}:
         related_documents = ls.included_documents(params.text_document.uri)[1:]
 
     reference_result = refs_for_pos(

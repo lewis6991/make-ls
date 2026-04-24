@@ -221,6 +221,23 @@ async def test_builtin_variable_hover_does_not_override_local_definition(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_hover_for_variable_reference_falls_back_to_included_makefile(
+    tmp_path: Path,
+) -> None:
+    _ = (tmp_path / 'rules.mk').write_text('FEATURE := enabled\n', encoding='utf-8')
+    text = 'include rules.mk\nall:\n\t@echo $(FEATURE)\n'
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document('Makefile', text)
+        _ = await session.wait_for_diagnostics(uri)
+        hover = await session.hover(uri, 2, 10)
+
+    assert hover is not None
+    value = hover_value(hover)
+    assert value.startswith('```make\nFEATURE := enabled\n```')
+
+
+@pytest.mark.asyncio
 async def test_hover_for_builtin_special_target_overrides_generic_target_hover(
     tmp_path: Path,
 ) -> None:

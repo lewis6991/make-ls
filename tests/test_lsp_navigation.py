@@ -132,6 +132,25 @@ async def test_go_to_definition_for_variable_reference(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_go_to_definition_for_variable_reference_falls_back_to_included_makefile(
+    tmp_path: Path,
+) -> None:
+    remote_path = tmp_path / 'rules.mk'
+    _ = remote_path.write_text('FEATURE := enabled\n', encoding='utf-8')
+    text = 'include rules.mk\nall:\n\t@echo $(FEATURE)\n'
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document('Makefile', text)
+        _ = await session.wait_for_diagnostics(uri)
+        definition = await session.definition(uri, 2, 10)
+
+    location = single_location(definition)
+    assert location.uri == remote_path.as_uri()
+    assert location.range.start.line == 0
+    assert location.range.start.character == 0
+
+
+@pytest.mark.asyncio
 async def test_references_for_target_excludes_declarations_when_requested(tmp_path: Path) -> None:
     text = 'all: dep\nother: dep\ndep:\n\t@echo dep\n'
 
@@ -179,6 +198,24 @@ async def test_references_for_variable_include_definition_and_references(
         (uri, 0, 0),
         (uri, 1, 8),
         (uri, 3, 9),
+    }
+
+
+@pytest.mark.asyncio
+async def test_references_for_variable_follow_included_makefiles(tmp_path: Path) -> None:
+    remote_path = tmp_path / 'rules.mk'
+    _ = remote_path.write_text('FEATURE := enabled\nother := $(FEATURE)\n', encoding='utf-8')
+    text = 'include rules.mk\nall:\n\t@echo $(FEATURE)\n'
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document('Makefile', text)
+        _ = await session.wait_for_diagnostics(uri)
+        references = await session.references(uri, 2, 10, include_declaration=True)
+
+    assert location_set(references) == {
+        (uri, 2, 9),
+        (remote_path.as_uri(), 0, 0),
+        (remote_path.as_uri(), 1, 11),
     }
 
 

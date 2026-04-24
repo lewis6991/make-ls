@@ -128,3 +128,19 @@ async def test_completes_local_and_included_targets_in_prerequisites(tmp_path: P
     assert dep_edit.new_text == 'dep'
     assert dep_edit.range.start.character == completion_character
     assert dep_edit.range.end.character == completion_character
+
+
+@pytest.mark.asyncio
+async def test_completes_variables_from_included_makefiles(tmp_path: Path) -> None:
+    _ = (tmp_path / 'rules.mk').write_text('FEATURE := enabled\n', encoding='utf-8')
+    text = 'include rules.mk\nall:\n\t@echo $(FEAT)\n'
+    completion_character = text.splitlines()[2].index(')')
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document('Makefile', text)
+        _ = await session.wait_for_diagnostics(uri)
+        items = await session.completion(uri, 2, completion_character)
+
+    feature_item = completion_by_label(items)['FEATURE']
+    assert feature_item.kind == lsp.CompletionItemKind.Variable
+    assert feature_item.detail == 'rules.mk: FEATURE := enabled'

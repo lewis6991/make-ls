@@ -14,7 +14,7 @@ from lsprotocol import types as lsp
 
 from make_ls.builtin_docs import BUILTIN_VARIABLE_DOCS, DIRECTIVE_DOCS, FUNCTION_DOCS
 
-from .navigation import resolve_variable_definition
+from .navigation import resolve_related_variable_definition
 from .recovery import ASSIGNMENT_RE, CONDITIONAL_DIRECTIVES, VARIABLE_REFERENCE_DELIMITERS
 
 if TYPE_CHECKING:
@@ -57,7 +57,12 @@ def complete_for_pos(
 
     variable_context = _variable_completion_context(line_text, character)
     if variable_context is not None:
-        items = _variable_completion_items(document, position, variable_context)
+        items = _variable_completion_items(
+            document,
+            position,
+            variable_context,
+            related_documents,
+        )
         return items or None
 
     prerequisite_context = _prerequisite_completion_context(
@@ -256,33 +261,42 @@ def _variable_completion_items(
     document: AnalyzedDoc,
     position: lsp.Position,
     context: _CompletionContext,
+    related_documents: tuple[AnalyzedDoc, ...],
 ) -> list[lsp.CompletionItem]:
     completion_range = _completion_range(position.line, context)
     items: list[lsp.CompletionItem] = []
-    local_variable_names = [
-        name for name in sorted(document.variables) if name.startswith(context.prefix)
-    ]
-    for index, name in enumerate(local_variable_names):
-        definition = resolve_variable_definition(
-            document,
-            name,
-            position.line,
-            position.character,
-        )
-        if definition is None:
-            continue
-        items.append(
-            lsp.CompletionItem(
-                label=name,
-                kind=lsp.CompletionItemKind.Variable,
-                detail=_assignment_detail(definition),
-                documentation=_variable_documentation(definition),
-                sort_text=f'0-{index:04d}-{name}',
-                text_edit=lsp.TextEdit(range=completion_range, new_text=name),
+    seen_variable_names: set[str] = set()
+    index = 0
+    for source_document in (document, *related_documents):
+        for name in sorted(source_document.variables):
+            if not name.startswith(context.prefix) or name in seen_variable_names:
+                continue
+            definition_result = resolve_related_variable_definition(
+                source_document,
+                name,
+                position.line,
+                position.character,
             )
-        )
+            if definition_result is None:
+                continue
+            definition_document, definition = definition_result
+            seen_variable_names.add(name)
+            items.append(
+                lsp.CompletionItem(
+                    label=name,
+                    kind=lsp.CompletionItemKind.Variable,
+                    detail=(
+                        _assignment_detail(definition)
+                        if definition_document.uri == document.uri
+                        else _variable_completion_detail(definition_document.uri, definition)
+                    ),
+                    documentation=_variable_documentation(definition),
+                    sort_text=f'0-{index:04d}-{name}',
+                    text_edit=lsp.TextEdit(range=completion_range, new_text=name),
+                )
+            )
+            index += 1
 
-    seen_variable_names = set(local_variable_names)
     builtin_variable_names = [
         name
         for name in sorted(BUILTIN_VARIABLE_DOCS)
@@ -427,6 +441,12 @@ def _assignment_detail(definition: VarDef) -> str:
     if len(value) > 60:
         value = value[:57] + '...'
     return f'{definition.name} {definition.operator} {value}'
+
+
+def _variable_completion_detail(uri: str, definition: VarDef) -> str:
+    detail = _assignment_detail(definition)
+    source_name = uri.rsplit('/', 1)[-1]
+    return detail if source_name == 'Makefile' else f'{source_name}: {detail}'
 
 
 def _target_detail(uri: str, rule_text: str) -> str:

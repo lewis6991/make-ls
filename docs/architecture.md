@@ -19,8 +19,12 @@ stays at the repo-shape level so it does not duplicate them.
   the recovered model
 - `src/make_ls/analysis/completion.py`: completion over recovered symbols plus
   lightweight line-context detection
+- `src/make_ls/analysis/document_symbols.py`: document symbols over recovered
+  target and variable definitions
 - `src/make_ls/analysis/hover.py`: hover rendering and builtin GNU Make docs
 - `src/make_ls/analysis/navigation.py`: definition, references, and rename
+- `src/make_ls/analysis/signature_help.py`: builtin GNU Make function
+  signature help from line-local context
 - `src/make_ls/lsp/server.py`: LSP server state, caches, and included-document
   traversal
 - `src/make_ls/lsp/features/*.py`: per-feature LSP handlers wired by the server

@@ -13,6 +13,7 @@ from make_ls.analysis.recovery import (
     has_unescaped_line_continuation,
     recover_include_directives,
     recover_rules,
+    recover_variable_assignments,
     slice_source_lines,
 )
 from make_ls.types import Span
@@ -182,6 +183,17 @@ def included_target_names(
     return frozenset(targets), frozenset(phony_targets)
 
 
+def included_variable_names(
+    base_directory: Path,
+    include_patterns: tuple[str, ...],
+) -> frozenset[str]:
+    variable_names: set[str] = set()
+    seen_paths: set[Path] = set()
+    for path in resolved_static_include_paths(base_directory, include_patterns):
+        _extend_included_variable_names(path, seen_paths, variable_names)
+    return frozenset(variable_names)
+
+
 def _extend_included_target_names(
     path: Path,
     seen_paths: set[Path],
@@ -208,3 +220,29 @@ def _extend_included_target_names(
         tuple(include.path for include in include_recovery.includes),
     ):
         _extend_included_target_names(include_path, seen_paths, targets, phony_targets)
+
+
+def _extend_included_variable_names(
+    path: Path,
+    seen_paths: set[Path],
+    variable_names: set[str],
+) -> None:
+    resolved_path = path.resolve()
+    if resolved_path in seen_paths:
+        return
+    seen_paths.add(resolved_path)
+
+    try:
+        source_lines = path.read_text(encoding='utf-8').splitlines()
+    except (OSError, UnicodeDecodeError):
+        return
+
+    assignment_recovery = recover_variable_assignments(source_lines, {})
+    variable_names.update(definition.name for definition in assignment_recovery.definitions)
+
+    include_recovery = recover_include_directives(source_lines)
+    for include_path in resolved_static_include_paths(
+        path.parent,
+        tuple(include.path for include in include_recovery.includes),
+    ):
+        _extend_included_variable_names(include_path, seen_paths, variable_names)

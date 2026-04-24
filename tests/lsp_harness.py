@@ -171,6 +171,19 @@ class LspSession:
             return list(result.items)
         return list(result)
 
+    async def signature_help(
+        self,
+        uri: str,
+        line: int,
+        character: int,
+    ) -> lsp.SignatureHelp | None:
+        return await self.client.text_document_signature_help_async(
+            lsp.SignatureHelpParams(
+                text_document=lsp.TextDocumentIdentifier(uri=uri),
+                position=lsp.Position(line=line, character=character),
+            )
+        )
+
     async def definition(
         self, uri: str, line: int, character: int
     ) -> lsp.Location | list[lsp.Location] | None:
@@ -200,6 +213,16 @@ class LspSession:
             )
         )
         return None if result is None else list(result)
+
+    async def document_symbols(self, uri: str) -> list[lsp.DocumentSymbol]:
+        result = await self.client.text_document_document_symbol_async(
+            lsp.DocumentSymbolParams(
+                text_document=lsp.TextDocumentIdentifier(uri=uri),
+            )
+        )
+        if result is None:
+            return []
+        return [symbol for symbol in result if isinstance(symbol, lsp.DocumentSymbol)]
 
     async def prepare_rename(
         self, uri: str, line: int, character: int

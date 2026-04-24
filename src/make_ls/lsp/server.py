@@ -21,9 +21,11 @@ from make_ls.analysis import analyze_document
 
 from .features.code_actions import register as register_code_action_feature
 from .features.completion import register as register_completion_feature
+from .features.document_symbols import register as register_document_symbol_feature
 from .features.hover import register as register_hover_feature
 from .features.lifecycle import register as register_lifecycle_feature
 from .features.navigation import register as register_navigation_features
+from .features.signature_help import register as register_signature_help_feature
 
 if TYPE_CHECKING:
     from make_ls.types import AnalyzedDoc
@@ -152,7 +154,9 @@ def create_server() -> MakeLsLanguageServer:
     register_lifecycle_feature(server)
     register_hover_feature(server)
     register_completion_feature(server)
+    register_signature_help_feature(server)
     register_navigation_features(server)
+    register_document_symbol_feature(server)
     register_code_action_feature(server)
     return server
 

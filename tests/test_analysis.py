@@ -113,6 +113,7 @@ def test_analyze_document_allows_direct_recipe_local_eval_variables() -> None:
         ('include missing.mk\n', ('unresolved-include',)),
         ('all: __make_ls_missing_dep__\n\t@echo hi\n', ('unresolved-prerequisite',)),
         ('all:\n\t@echo first\nall:\n\t@echo second\n', ('overriding-recipe',)),
+        ('all:\n\t@echo one\nall::\n\t@echo two\n', ('mixed-rule-separator',)),
         ('a: b\n\t@:\nb: a\n\t@:\n', ('circular-prerequisite',)),
     ],
 )

@@ -41,16 +41,22 @@ def def_for_pos(
             return locations[0]
         return locations
 
-    definition = resolve_variable_definition(
+    definitions = _variable_definition_locations(
         document,
         occurrence.name,
         occurrence.span.start_line,
         occurrence.span.start_character,
+        related_documents=related_documents,
     )
-    if definition is None:
+    if not definitions:
         return None
-
-    return lsp.Location(uri=document.uri, range=definition.name_span.to_lsp_range())
+    locations = [
+        lsp.Location(uri=source_document.uri, range=definition.name_span.to_lsp_range())
+        for source_document, definition in definitions
+    ]
+    if len(locations) == 1:
+        return locations[0]
+    return locations
 
 
 def refs_for_pos(
@@ -77,20 +83,27 @@ def refs_for_pos(
         )
 
     if occurrence.role == 'reference' and (
-        _strict_variable_definition_at_position(
+        _strict_variable_definition_document_uris(
             document,
             occurrence.name,
             occurrence.span.start_line,
             occurrence.span.start_character,
+            related_documents=related_documents,
         )
-        is None
+        == frozenset()
     ):
         return []
 
     return _variable_references(
-        document,
+        (document, *related_documents),
+        document.uri,
         occurrence.name,
         source_lines,
+        _strict_variable_target_definition_document_uris(
+            document,
+            occurrence,
+            related_documents,
+        ),
         include_declaration=include_declaration,
     )
 
@@ -176,6 +189,25 @@ def resolve_variable_definition(
     return best_match if best_match is not None else definitions[0]
 
 
+def resolve_related_variable_definition(
+    document: AnalyzedDoc,
+    name: str,
+    line: int,
+    character: int,
+    related_documents: tuple[AnalyzedDoc, ...] = (),
+) -> tuple[AnalyzedDoc, VarDef] | None:
+    definitions = _variable_definition_locations(
+        document,
+        name,
+        line,
+        character,
+        related_documents=related_documents,
+    )
+    if len(definitions) != 1:
+        return None
+    return definitions[0]
+
+
 def pattern_target_definitions(
     document: AnalyzedDoc,
     name: str,
@@ -213,6 +245,62 @@ def _strict_variable_definition_at_position(
     if not definitions:
         return None
     return _latest_variable_definition_before_position(definitions, line, character)
+
+
+def _variable_definition_locations(
+    document: AnalyzedDoc,
+    name: str,
+    line: int,
+    character: int,
+    *,
+    related_documents: tuple[AnalyzedDoc, ...] = (),
+) -> tuple[tuple[AnalyzedDoc, VarDef], ...]:
+    definition = resolve_variable_definition(document, name, line, character)
+    if definition is not None:
+        return ((document, definition),)
+
+    matches: list[tuple[AnalyzedDoc, VarDef]] = []
+    for related_document in related_documents:
+        definitions = related_document.variables.get(name)
+        if not definitions:
+            continue
+        matches.append((related_document, definitions[0]))
+    return tuple(matches)
+
+
+def _strict_variable_definition_document_uris(
+    document: AnalyzedDoc,
+    name: str,
+    line: int,
+    character: int,
+    *,
+    related_documents: tuple[AnalyzedDoc, ...] = (),
+) -> frozenset[str]:
+    if _strict_variable_definition_at_position(document, name, line, character) is not None:
+        return frozenset({document.uri})
+    return frozenset(
+        related_document.uri
+        for related_document in related_documents
+        if related_document.variables.get(name)
+    )
+
+
+def _strict_variable_target_definition_document_uris(
+    document: AnalyzedDoc,
+    occurrence: SymOcc,
+    related_documents: tuple[AnalyzedDoc, ...],
+) -> frozenset[str]:
+    if occurrence.kind != 'variable':
+        return frozenset()
+    if occurrence.role == 'definition':
+        return frozenset({document.uri})
+    return _strict_variable_definition_document_uris(
+        document,
+        occurrence.name,
+        occurrence.span.start_line,
+        occurrence.span.start_character,
+        related_documents=related_documents,
+    )
 
 
 def _definition_target_definitions(
@@ -266,9 +354,11 @@ def _target_references(
 
 
 def _variable_references(
-    document: AnalyzedDoc,
+    documents: tuple[AnalyzedDoc, ...],
+    current_document_uri: str,
     name: str,
     source_lines: tuple[str, ...],
+    target_definition_document_uris: frozenset[str],
     *,
     include_declaration: bool,
 ) -> list[lsp.Location]:
@@ -276,31 +366,42 @@ def _variable_references(
     seen: set[tuple[str, Span]] = set()
 
     if include_declaration:
-        for definition in document.variables.get(name, ()):
-            _append_location(locations, seen, document.uri, definition.name_span)
+        for source_document in documents:
+            if source_document.uri not in target_definition_document_uris:
+                continue
+            for definition in source_document.variables.get(name, ()):
+                _append_location(locations, seen, source_document.uri, definition.name_span)
 
-    # Variable expansion is still modeled conservatively, so references follow
-    # the same same-document, local-definition rules as rename.
-    for occurrence in document.occurrences:
-        if occurrence.kind != 'variable' or occurrence.role != 'reference':
-            continue
-        if occurrence.name != name:
-            continue
-        if (
-            _strict_variable_definition_at_position(
-                document,
-                name,
-                occurrence.span.start_line,
-                occurrence.span.start_character,
+    for source_document in documents:
+        other_documents = tuple(
+            related_document
+            for related_document in documents
+            if related_document.uri != source_document.uri
+        )
+        for occurrence in source_document.occurrences:
+            if occurrence.kind != 'variable' or occurrence.role != 'reference':
+                continue
+            if occurrence.name != name:
+                continue
+            if (
+                _strict_variable_definition_document_uris(
+                    source_document,
+                    name,
+                    occurrence.span.start_line,
+                    occurrence.span.start_character,
+                    related_documents=other_documents,
+                )
+                != target_definition_document_uris
+            ):
+                continue
+
+            name_span = _variable_name_span_for_occurrence(
+                occurrence,
+                source_lines if source_document.uri == current_document_uri else None,
             )
-            is None
-        ):
-            continue
-
-        name_span = _variable_name_span_for_occurrence(occurrence, source_lines)
-        if name_span is None:
-            continue
-        _append_location(locations, seen, document.uri, name_span)
+            if name_span is None:
+                continue
+            _append_location(locations, seen, source_document.uri, name_span)
 
     return locations
 
@@ -329,12 +430,24 @@ def _is_renameable_variable_occurrence(
 
 def _variable_name_span_for_occurrence(
     occurrence: SymOcc,
-    source_lines: tuple[str, ...],
+    source_lines: tuple[str, ...] | None,
 ) -> Span | None:
     if occurrence.kind != 'variable':
         return None
     if occurrence.role == 'definition':
         return occurrence.span
+    if source_lines is None:
+        reference_width = occurrence.span.end_character - occurrence.span.start_character
+        if occurrence.span.start_line != occurrence.span.end_line:
+            return None
+        if reference_width != len(occurrence.name) + 3:
+            return None
+        return Span(
+            occurrence.span.start_line,
+            occurrence.span.start_character + 2,
+            occurrence.span.end_line,
+            occurrence.span.end_character - 1,
+        )
     if occurrence.span.start_line >= len(source_lines):
         return None
 

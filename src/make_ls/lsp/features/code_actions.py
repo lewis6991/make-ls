@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING, cast
 
 from lsprotocol import types as lsp
 
+from make_ls.analysis.diagnostics.control_blocks import (
+    MISSING_ENDEF_DIAGNOSTIC_CODE,
+    MISSING_ENDIF_DIAGNOSTIC_CODE,
+)
 from make_ls.analysis.diagnostics.unknown_variable import UNKNOWN_VARIABLE_DIAGNOSTIC_CODE
+from make_ls.analysis.diagnostics.unresolved_include import UNRESOLVED_INCLUDE_DIAGNOSTIC_CODE
 from make_ls.analysis.diagnostics.unresolved_prerequisite import (
     UNRESOLVED_PREREQUISITE_DIAGNOSTIC_CODE,
 )
@@ -48,6 +53,20 @@ def code_action(ls: FeatureServer, params: lsp.CodeActionParams) -> list[lsp.Cod
             _supports_snippet_workspace_edits(
                 cast('lsp.ClientCapabilities', ls.client_capabilities)
             ),
+            params.context.diagnostics,
+        )
+    )
+    actions.extend(
+        _unresolved_include_code_actions(
+            params.text_document.uri,
+            text_document.source,
+            params.context.diagnostics,
+        )
+    )
+    actions.extend(
+        _missing_block_code_actions(
+            params.text_document.uri,
+            text_document.source,
             params.context.diagnostics,
         )
     )
@@ -171,6 +190,94 @@ def _unresolved_prerequisite_code_actions(
     return actions
 
 
+def _unresolved_include_code_actions(
+    uri: str,
+    source: str,
+    diagnostics: Sequence[lsp.Diagnostic],
+) -> list[lsp.CodeAction]:
+    source_lines = tuple(source.splitlines())
+    actions: list[lsp.CodeAction] = []
+    seen_lines: set[int] = set()
+    for diagnostic in diagnostics:
+        if diagnostic.code != UNRESOLVED_INCLUDE_DIAGNOSTIC_CODE:
+            continue
+        line_number = diagnostic.range.start.line
+        if line_number in seen_lines or line_number >= len(source_lines):
+            continue
+
+        line_text = source_lines[line_number]
+        directive_start = len(line_text) - len(line_text.lstrip(' '))
+        if not line_text[directive_start:].startswith('include'):
+            continue
+        seen_lines.add(line_number)
+        actions.append(
+            lsp.CodeAction(
+                title='Change include to -include',
+                kind=lsp.CodeActionKind.QuickFix,
+                diagnostics=[diagnostic],
+                is_preferred=True,
+                edit=lsp.WorkspaceEdit(
+                    changes={
+                        uri: [
+                            lsp.TextEdit(
+                                range=lsp.Range(
+                                    start=lsp.Position(
+                                        line=line_number,
+                                        character=directive_start,
+                                    ),
+                                    end=lsp.Position(
+                                        line=line_number,
+                                        character=directive_start + len('include'),
+                                    ),
+                                ),
+                                new_text='-include',
+                            )
+                        ]
+                    }
+                ),
+            )
+        )
+
+    return actions
+
+
+def _missing_block_code_actions(
+    uri: str,
+    source: str,
+    diagnostics: Sequence[lsp.Diagnostic],
+) -> list[lsp.CodeAction]:
+    actions: list[lsp.CodeAction] = []
+    for diagnostic in diagnostics:
+        if diagnostic.code not in {
+            MISSING_ENDEF_DIAGNOSTIC_CODE,
+            MISSING_ENDIF_DIAGNOSTIC_CODE,
+        }:
+            continue
+        closer = 'endef' if diagnostic.code == MISSING_ENDEF_DIAGNOSTIC_CODE else 'endif'
+        actions.append(
+            lsp.CodeAction(
+                title=f'Insert missing {closer}',
+                kind=lsp.CodeActionKind.QuickFix,
+                diagnostics=[diagnostic],
+                is_preferred=True,
+                edit=lsp.WorkspaceEdit(
+                    changes={
+                        uri: [
+                            lsp.TextEdit(
+                                range=lsp.Range(
+                                    start=_document_end_position(source),
+                                    end=_document_end_position(source),
+                                ),
+                                new_text=_eof_append_text(source, f'{closer}\n'),
+                            )
+                        ]
+                    }
+                ),
+            )
+        )
+    return actions
+
+
 def _empty_assignment_insertion_line(
     document: AnalyzedDoc,
     occurrence: SymOcc,
@@ -246,3 +353,9 @@ def _document_end_position(source: str) -> lsp.Position:
     if source.endswith('\n'):
         return lsp.Position(line=len(source_lines), character=0)
     return lsp.Position(line=len(source_lines) - 1, character=len(source_lines[-1]))
+
+
+def _eof_append_text(source: str, text: str) -> str:
+    if source == '' or source.endswith('\n'):
+        return text
+    return f'\n{text}'

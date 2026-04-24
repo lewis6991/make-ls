@@ -18,10 +18,12 @@ from .common import (
 if TYPE_CHECKING:
     from .base import DiagnosticContext
 
+UNRESOLVED_INCLUDE_DIAGNOSTIC_CODE = 'unresolved-include'
+
 
 @final
 class UnresolvedIncludeChecker(DiagnosticChecker):
-    CODE = 'unresolved-include'
+    CODE = UNRESOLVED_INCLUDE_DIAGNOSTIC_CODE
     SEVERITY = lsp.DiagnosticSeverity.Warning
 
     @override

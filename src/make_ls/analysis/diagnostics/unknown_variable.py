@@ -11,7 +11,7 @@ from make_ls.analysis.recovery import ASSIGNMENT_RE, RECIPE_LOCAL_EVAL_RE, slice
 from make_ls.builtin_docs import BUILTIN_VARIABLE_DOCS
 
 from .base import DiagnosticChecker
-from .common import diagnostic_message
+from .common import diagnostic_message, included_variable_names, uri_base_directory
 
 if TYPE_CHECKING:
     from make_ls.types import RecipeLine, SymCtx
@@ -30,10 +30,16 @@ class UnknownVariableChecker(DiagnosticChecker):
     def check(self, context: DiagnosticContext) -> list[lsp.Diagnostic]:
         diagnostics: list[lsp.Diagnostic] = []
         recipe_local_variables = _recipe_local_eval_variables(context.recipe_lines)
+        included_variables: frozenset[str] = frozenset()
+        base_directory = uri_base_directory(context.uri)
+        if base_directory is not None and context.include_patterns:
+            included_variables = included_variable_names(base_directory, context.include_patterns)
         for occurrence in context.occurrences:
             if occurrence.kind != 'variable' or occurrence.role != 'reference':
                 continue
             if occurrence.name in context.variable_map:
+                continue
+            if occurrence.name in included_variables:
                 continue
             if (
                 occurrence.context is not None

@@ -95,6 +95,18 @@ async def test_does_not_warn_for_included_target_prerequisite(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_does_not_warn_for_variable_defined_in_included_makefile(tmp_path: Path) -> None:
+    _ = (tmp_path / 'rules.mk').write_text('FEATURE := enabled\n', encoding='utf-8')
+    text = 'include rules.mk\n\nall:\n\t@echo $(FEATURE)\n'
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document('Makefile', text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
 async def test_warns_for_unresolved_include(tmp_path: Path) -> None:
     text = 'include missing.mk\n'
 
@@ -208,6 +220,20 @@ async def test_does_not_warn_for_overriding_double_colon_recipe(tmp_path: Path) 
         diagnostics = await session.wait_for_diagnostics(uri)
 
     assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_errors_for_target_with_both_single_and_double_colon_rules(tmp_path: Path) -> None:
+    text = 'all:\n\t@echo one\n\nall::\n\t@echo two\n'
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document('Makefile', text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].range.start.line == 3
+    assert diagnostics[0].severity == lsp.DiagnosticSeverity.Error
+    assert diagnostics[0].message == 'Target has both : and :: rules: `all`'
 
 
 @pytest.mark.asyncio

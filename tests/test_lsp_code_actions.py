@@ -116,3 +116,57 @@ async def test_make_syntax_diagnostic_has_no_code_actions(tmp_path: Path) -> Non
         actions = await session.code_actions(uri, diagnostics[0].range, diagnostics)
 
     assert actions == []
+
+
+@pytest.mark.asyncio
+async def test_unresolved_include_code_action_changes_to_optional_include(tmp_path: Path) -> None:
+    text = 'include missing.mk\n'
+
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document('Makefile', text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+        actions = await session.code_actions(uri, diagnostics[0].range, diagnostics)
+
+    assert len(actions) == 1
+    action = actions[0]
+    assert isinstance(action, lsp.CodeAction)
+    assert action.title == 'Change include to -include'
+    assert action.edit is not None
+    updated = apply_text_edits(text, workspace_edits_for_uri(action.edit, uri))
+    assert updated == '-include missing.mk\n'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('text', 'expected_title', 'expected_text'),
+    [
+        (
+            'ifeq ($(MODE),test)\nall:\n\t@echo hi\n',
+            'Insert missing endif',
+            'ifeq ($(MODE),test)\nall:\n\t@echo hi\nendif\n',
+        ),
+        (
+            'define BODY\n\t@echo hi\n',
+            'Insert missing endef',
+            'define BODY\n\t@echo hi\nendef\n',
+        ),
+    ],
+)
+async def test_missing_block_code_action_inserts_closer_at_eof(
+    tmp_path: Path,
+    text: str,
+    expected_title: str,
+    expected_text: str,
+) -> None:
+    async with LspSession(tmp_path) as session:
+        uri = await session.open_document('Makefile', text)
+        diagnostics = await session.wait_for_diagnostics(uri)
+        actions = await session.code_actions(uri, diagnostics[0].range, diagnostics)
+
+    assert len(actions) == 1
+    action = actions[0]
+    assert isinstance(action, lsp.CodeAction)
+    assert action.title == expected_title
+    assert action.edit is not None
+    updated = apply_text_edits(text, workspace_edits_for_uri(action.edit, uri))
+    assert updated == expected_text

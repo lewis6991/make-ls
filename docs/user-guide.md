@@ -12,9 +12,11 @@ diagnostics and symbol understanding stay close across editor and CLI use.
   variables, and special targets
 - completion for GNU Make directives, functions, variables, and prerequisite
   targets
+- signature help for builtin GNU Make functions
 - go to definition for targets and variables
 - references for targets and variables
 - variable rename with prepare-rename support
+- document symbols for targets and variables
 - quick fixes for a small set of common diagnostics
 - diagnostics on open, change, and save
 
@@ -22,6 +24,7 @@ diagnostics and symbol understanding stay close across editor and CLI use.
 
 - explicit `include`, `-include`, and `sinclude` directives
 - nested static includes for target lookup
+- nested static includes for variable lookup
 - pattern rules for target definition lookup
 - leading comment blocks on variable assignments for variable hover docs
 - local variable definitions and builtin GNU Make names for completion
@@ -29,11 +32,11 @@ diagnostics and symbol understanding stay close across editor and CLI use.
 
 ### Current limits
 
-- variable completion stays within the current document
 - target completion only runs in prerequisite lists and only follows static
   includes
 - variable rename is variable-only and stays within the current document
 - target lookup through includes only works for static include paths
+- signature help is builtin-function-only and stays line-local
 - no full GNU Make evaluation
 
 ## Diagnostics
@@ -52,6 +55,7 @@ diagnostics and symbol understanding stay close across editor and CLI use.
   `Unexpected endef directive`
   `Missing endif for conditional block`
   `Missing endef for define block`
+- targets that mix `:` and `::` rules
 - invalid shell syntax inside recipe lines
 
 ### Warnings
@@ -69,6 +73,8 @@ diagnostics and symbol understanding stay close across editor and CLI use.
 - environment variables are not reported as unknown variables
 - unknown-variable warnings are suppressed in conditional branches that prove
   the exact variable is defined or nonempty
+- unknown-variable warnings are also skipped when the name is defined in a
+  static included makefile
 - prerequisite warnings are skipped when the prerequisite already exists as a
   file, is defined as a target, matches a pattern rule, or is found through a
   static include
@@ -77,7 +83,7 @@ diagnostics and symbol understanding stay close across editor and CLI use.
 
 ## Quick fixes
 
-Quick fixes currently exist for two diagnostics:
+Quick fixes currently exist for four kinds of diagnostics:
 
 - `Unknown variable reference`
   creates an empty assignment such as `FEATURE :=`
@@ -88,6 +94,10 @@ Quick fixes currently exist for two diagnostics:
 dep:
 	# TODO
 ```
+- `Unresolved include`
+  changes `include missing.mk` to `-include missing.mk`
+- `Missing endif for conditional block` and `Missing endef for define block`
+  append the missing closer at end of file
 
 When the client supports snippet workspace edits, the target stub places the
 cursor on the `TODO` comment.
