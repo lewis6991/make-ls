@@ -172,7 +172,16 @@ make-ls --no-log-file
 The `check` subcommand uses the same CLI process, but the logs are mainly useful
 for LSP troubleshooting.
 
+## VS Code
+
+There is a VS Code extension under `editors/vscode`.
+
+- build a local VSIX with `make vscode-vsix`
+- point the extension at a checkout with `make-ls.server.repoRoot`
+- or configure an explicit launch command with `make-ls.server.command`
+
 ## See also
 
 - `README.md` for install and quick-start examples
+- `editors/vscode/README.md` for extension setup and VSIX packaging
 - `docs/architecture.md` for contributor-facing code structure

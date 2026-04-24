@@ -1,0 +1,88 @@
+{
+  "name": "make-ls-vscode",
+  "displayName": "make-ls",
+  "description": "VS Code extension for the make-ls language server.",
+  "version": "0.4.0",
+  "private": true,
+  "publisher": "lewis6991",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lewis6991/makels.git"
+  },
+  "homepage": "https://github.com/lewis6991/makels#readme",
+  "bugs": {
+    "url": "https://github.com/lewis6991/makels/issues"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "make",
+    "makefile",
+    "gnu make",
+    "language server",
+    "lsp"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "files": [
+    "LICENSE",
+    "README.md",
+    "package.json",
+    "node_modules/**",
+    "src/**"
+  ],
+  "activationEvents": [
+    "onLanguage:makefile"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "make-ls.restartServer",
+        "title": "make-ls: Restart Language Server"
+      }
+    ],
+    "configuration": {
+      "title": "make-ls",
+      "properties": {
+        "make-ls.server.command": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Command used to start the language server. Prefer the executable name here and pass the rest through `make-ls.server.args`. If `make-ls.server.args` is empty, a command line such as `uv run make-ls` is also accepted. Quote any path that contains spaces."
+        },
+        "make-ls.server.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Arguments passed to `make-ls.server.command`."
+        },
+        "make-ls.server.repoRoot": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Repository root for local `make-ls` development. When `make-ls.server.command` is empty and this is set, the extension starts `/path/to/repo/.venv/bin/make-ls` from that checkout."
+        },
+        "make-ls.server.cwd": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Working directory used when starting the language server. Relative paths are resolved against the first workspace folder."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "check": "node --check src/command-line.js && node --check src/extension.js && npm run test",
+    "package:vsix": "npm exec --package @vscode/vsce -- vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

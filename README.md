@@ -40,12 +40,17 @@ vim.lsp.config('make-ls', {
 vim.lsp.enable("make-ls")
 ```
 
+## VS Code
+
+See [editors/vscode/README.md](editors/vscode/README.md) for the VS Code
+extension, settings, and VSIX packaging flow.
+
 ## Docs
 
 - [User Guide](docs/user-guide.md) for features, diagnostics, `check`, logging,
   and limits
+- [VS Code](editors/vscode/README.md)
 - [Architecture](docs/architecture.md)
-- [Plan](PLAN.md)
 
 ## Development
 
@@ -54,4 +59,5 @@ uv sync --all-groups
 make check
 make test
 make build
+make vscode-vsix
 ```

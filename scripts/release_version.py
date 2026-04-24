@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import tomllib
 from pathlib import Path
@@ -10,6 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT_PATH = ROOT / 'pyproject.toml'
 PACKAGE_VERSION_PATH = ROOT / 'src' / 'make_ls' / '_version.py'
 UV_LOCK_PATH = ROOT / 'uv.lock'
+VSCODE_PACKAGE_JSON_PATH = ROOT / 'editors' / 'vscode' / 'package.json'
+VSCODE_PACKAGE_LOCK_PATH = ROOT / 'editors' / 'vscode' / 'package-lock.json'
 
 _PYPROJECT_VERSION_PATTERN = re.compile(r'(?m)^(version\s*=\s*)"[^"]+"$')
 _MODULE_VERSION_PATTERN = re.compile(r"""(?m)^__version__ = ['"][^'"]+['"]$""")
@@ -91,6 +94,7 @@ def stamp_version(version: str) -> None:
     _replace_pattern(PYPROJECT_PATH, _PYPROJECT_VERSION_PATTERN, rf'\1"{version}"')
     _replace_pattern(PACKAGE_VERSION_PATH, _MODULE_VERSION_PATTERN, f"__version__ = '{version}'")
     _replace_pattern(UV_LOCK_PATH, _UV_LOCK_VERSION_PATTERN, rf'\1"{version}"')
+    _update_json_versions(version)
 
 
 def _parse_stable_version(version: str) -> tuple[int, int, int]:
@@ -115,6 +119,39 @@ def _replace_pattern(path: Path, pattern: re.Pattern[str], replacement: str) -> 
     if count != 1:
         raise ValueError(f'could not update version in {path}')
     _ = path.write_text(updated_text, encoding='utf-8')
+
+
+def _update_json_versions(version: str) -> None:
+    package_json = json.loads(VSCODE_PACKAGE_JSON_PATH.read_text(encoding='utf-8'))
+    package_json['version'] = version
+    _ = VSCODE_PACKAGE_JSON_PATH.write_text(
+        json.dumps(package_json, indent=2) + '\n',
+        encoding='utf-8',
+    )
+
+    package_lock = json.loads(VSCODE_PACKAGE_LOCK_PATH.read_text(encoding='utf-8'))
+    package_lock = _strip_package_lock_resolved(package_lock)
+    package_lock['version'] = version
+    if package_lock.get('packages', {}).get('') is not None:
+        package_lock['packages']['']['version'] = version
+    _ = VSCODE_PACKAGE_LOCK_PATH.write_text(
+        json.dumps(package_lock, indent=2) + '\n',
+        encoding='utf-8',
+    )
+
+
+def _strip_package_lock_resolved(value: object) -> object:
+    if isinstance(value, list):
+        return [_strip_package_lock_resolved(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    cleaned: dict[str, object] = {}
+    for key, item in value.items():
+        if key == 'resolved':
+            continue
+        cleaned[key] = _strip_package_lock_resolved(item)
+    return cleaned
 
 
 if __name__ == '__main__':

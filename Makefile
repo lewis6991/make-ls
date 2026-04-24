@@ -21,6 +21,18 @@ check:
 build:
 	$(UV) build --out-dir "$(DIST_DIR)"
 
+.PHONY: vscode-install
+vscode-install:
+	$(MAKE) -C editors/vscode install
+
+.PHONY: vscode-check
+vscode-check:
+	$(MAKE) -C editors/vscode check
+
+.PHONY: vscode-vsix
+vscode-vsix:
+	$(MAKE) -C editors/vscode vsix
+
 .PHONY: release-stamp
 release-stamp:
 	$(UV) run python scripts/release_version.py stamp "$(RELEASE_VERSION)"
