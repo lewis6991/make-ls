@@ -31,10 +31,11 @@ The test split mirrors the runtime split:
 - `tests/test_analysis.py` covers the document model and focused analyzer cases.
 - `tests/test_cli.py` covers the CLI surface, help, checker behavior, and JSON
   output.
-- `tests/test_e2e.py` covers LSP behavior end to end.
+- `tests/test_lsp_*.py` covers LSP behavior end to end, split by feature.
 
 For narrow analyzer work, start with `tests/test_analysis.py`. For changes that
-affect actual editor behavior, prove them in `tests/test_e2e.py`.
+affect actual editor behavior, prove them in the relevant `tests/test_lsp_*.py`
+module.
 
 ## Related notes
 
