@@ -1,3 +1,9 @@
+"""Recovery helpers that extract useful structure from partial Makefiles.
+
+These passes prefer useful partial recovery over full GNU Make evaluation so
+editor features can keep working on incomplete or invalid files.
+"""
+
 from __future__ import annotations
 
 import re
@@ -90,6 +96,7 @@ class _ConditionalFrame:
 
 
 def recover_conditionals(source_lines: list[str]) -> ConditionalRecovery:
+    """Recover top-level conditional forms, tests, and active branch guards."""
     forms: list[DocForm] = []
     occurrences: list[SymOcc] = []
     line_guards: dict[int, tuple[VarGuard, ...]] = {}
@@ -201,6 +208,7 @@ def recover_rules(
     source_lines: list[str],
     line_guards: dict[int, tuple[VarGuard, ...]],
 ) -> RuleRecovery:
+    """Recover rule definitions, prerequisite references, and recipe lines."""
     definitions: list[TargetDef] = []
     occurrences: list[SymOcc] = []
     recipe_lines: list[RecipeLine] = []
@@ -255,6 +263,7 @@ def recover_rules(
 
 
 def recover_include_directives(source_lines: list[str]) -> IncludeRecovery:
+    """Recover explicit include directives without evaluating Make variables."""
     includes: list[RecoveredInclude] = []
     occurrences: list[SymOcc] = []
     parsed_lines: set[int] = set()

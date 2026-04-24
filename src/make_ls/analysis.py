@@ -1,3 +1,14 @@
+"""Recovery-first analysis pipeline shared by the CLI and LSP server.
+
+The pipeline stays deliberately flat:
+
+1. split the source into lines
+2. recover conditionals, includes, rules, and variable assignments
+3. build shared target, variable, and occurrence maps
+4. run diagnostic passes over the recovered model
+5. return one `AnalyzedDoc` snapshot for downstream features
+"""
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -58,6 +69,7 @@ def analyze_document(
     *,
     include_shell_diagnostics: bool = True,
 ) -> AnalyzedDoc:
+    """Recover one Makefile into an `AnalyzedDoc` and all derived diagnostics."""
     source_lines = source.splitlines()
     target_map: defaultdict[str, list[TargetDef]] = defaultdict(list)
     variable_map: defaultdict[str, list[VarDef]] = defaultdict(list)

@@ -1,3 +1,10 @@
+"""Definition, reference, and rename logic over the recovered document model.
+
+Navigation reads `AnalyzedDoc` directly instead of reparsing the buffer.
+Variable rename stays single-document, while target navigation can traverse
+related included documents supplied by the server.
+"""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -156,6 +163,7 @@ def resolve_variable_definition(
     line: int,
     character: int,
 ) -> VarDef | None:
+    """Pick the closest earlier variable definition, matching Make's local feel."""
     definitions = document.variables.get(name)
     if not definitions:
         return None

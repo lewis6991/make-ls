@@ -1,3 +1,10 @@
+"""Diagnostic passes over the recovered Makefile model.
+
+This module owns structural Make diagnostics, unresolved symbol and path
+checks, and optional recipe shell validation. Shell checks are the exception:
+they shell out to `bash -n`, so hot edit paths can opt out.
+"""
+
 from __future__ import annotations
 
 import os
@@ -43,6 +50,7 @@ class _ConditionalControlFrame:
 
 
 def collect_shell_diagnostics(recipe_lines: tuple[RecipeLine, ...]) -> list[lsp.Diagnostic]:
+    """Validate logical recipe groups with `bash -n` when possible."""
     diagnostics: list[lsp.Diagnostic] = []
     for recipe_group in _logical_recipe_lines(recipe_lines):
         command_text = '\n'.join(line.command_text for line in recipe_group)
@@ -76,6 +84,7 @@ def collect_make_syntax_diagnostics(
     *,
     parsed_lines: frozenset[int],
 ) -> list[lsp.Diagnostic]:
+    """Report top-level lines that the recovery passes did not claim as valid."""
     diagnostics: list[lsp.Diagnostic] = []
     in_define_block = False
     line_number = 0
@@ -237,6 +246,7 @@ def collect_unknown_variable_diagnostics(
     occurrences: list[SymOcc],
     recipe_lines: tuple[RecipeLine, ...],
 ) -> list[lsp.Diagnostic]:
+    """Warn on unresolved variable references that are not suppressed by context."""
     diagnostics: list[lsp.Diagnostic] = []
     recipe_local_variables = _recipe_local_eval_variables(recipe_lines)
     for occurrence in occurrences:

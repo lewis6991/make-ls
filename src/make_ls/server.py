@@ -1,3 +1,10 @@
+"""pygls server wiring over the shared Makefile analysis pipeline.
+
+The server schedules shell-free analysis on change, re-enables shell checks on
+open and save, caches analyzed open and included files, and only follows
+include paths that can be resolved statically.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -37,12 +44,15 @@ def _server_version() -> str:
 
 
 class MakeLsLanguageServer(LanguageServer):
+    """Language server with cached `AnalyzedDoc` snapshots for open and included files."""
+
     def __init__(self) -> None:
         super().__init__('make-ls', _server_version())  # pyright: ignore[reportUnknownMemberType]
         self._documents: dict[str, AnalyzedDoc] = {}
         self._disk_signatures: dict[str, tuple[int, int]] = {}
 
     def analyze_uri(self, uri: str) -> AnalyzedDoc:
+        """Analyze an open document version without shelling out on edit paths."""
         document = self.workspace.get_text_document(uri)
         cached = self._documents.get(uri)
         if cached is not None and cached.version == document.version:
@@ -60,6 +70,7 @@ class MakeLsLanguageServer(LanguageServer):
         return analyzed
 
     def analyze_path(self, path: Path) -> AnalyzedDoc:
+        """Analyze an on-disk include target and reuse it while its stat signature matches."""
         uri = path.as_uri()
         if uri in self.workspace.text_documents:
             return self.analyze_uri(uri)
@@ -84,6 +95,7 @@ class MakeLsLanguageServer(LanguageServer):
         return analyzed
 
     def included_documents(self, uri: str) -> tuple[AnalyzedDoc, ...]:
+        """Follow statically resolved include paths starting from one open document."""
         current_document = self.analyze_uri(uri)
         current_path = _path_from_uri(uri)
         related_documents: list[AnalyzedDoc] = []
@@ -118,6 +130,7 @@ class MakeLsLanguageServer(LanguageServer):
         _ = self._disk_signatures.pop(uri, None)
 
     def publish_document_diagnostics(self, uri: str, *, include_shell_diagnostics: bool) -> None:
+        """Publish diagnostics, opting into shell checks only on slower safe points."""
         if include_shell_diagnostics:
             document = self.workspace.get_text_document(uri)
             analyzed = analyze_document(
@@ -139,6 +152,7 @@ class MakeLsLanguageServer(LanguageServer):
 
 
 def create_server() -> MakeLsLanguageServer:
+    """Create the language server and register its LSP feature handlers."""
     server = MakeLsLanguageServer()
 
     def did_open(ls: MakeLsLanguageServer, params: lsp.DidOpenTextDocumentParams) -> None:

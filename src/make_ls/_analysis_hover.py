@@ -1,3 +1,9 @@
+"""Hover rendering over recovered symbols plus builtin GNU Make docs.
+
+Hover resolves from the local analyzed document first, then falls back to
+related included documents or builtin directive, function, and variable docs.
+"""
+
 from __future__ import annotations
 
 import re
@@ -32,6 +38,7 @@ def hover_for_pos(
     related_documents: tuple[AnalyzedDoc, ...] = (),
     source_lines: tuple[str, ...] | None = None,
 ) -> lsp.Hover | None:
+    """Resolve hover content from local data first, then builtin fallbacks."""
     occurrence = document.occurrence_at(position.line, position.character)
     if occurrence is None:
         return _builtin_hover_for_position(source_lines, position)

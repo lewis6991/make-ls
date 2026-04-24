@@ -1,3 +1,10 @@
+"""CLI entrypoints for stdio LSP mode and the `make-ls check` batch checker.
+
+Running `make-ls` starts the stdio server. `make-ls check [paths ...]` reuses
+the same analyzer for batch diagnostics and emits text or JSON output over the
+discovered Makefiles.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -74,6 +81,7 @@ class MakeLsArgs(argparse.Namespace):
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run either the stdio server or the batch checker from one flat CLI."""
     parser = _argument_parser()
     args = parser.parse_args(
         list(argv) if argv is not None else None,
@@ -153,6 +161,7 @@ def _run_check(
     stderr: TextIO,
     output_format: str,
 ) -> int:
+    """Analyze discovered Makefiles and emit text or JSON diagnostics."""
     files = _check_files(raw_paths, stderr=stderr)
     if files is None:
         return 2

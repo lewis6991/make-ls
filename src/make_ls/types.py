@@ -1,3 +1,9 @@
+"""Shared recovered document model for the analyzer, CLI, and LSP server.
+
+`AnalyzedDoc` is the main seam in the codebase. Features are expected to read
+recovered structure from this model instead of reparsing source text on demand.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -21,6 +27,8 @@ VarGuardKind = Literal['defined', 'empty', 'nonempty', 'undefined']
 
 @dataclass(frozen=True, slots=True)
 class Span:
+    """Half-open source range used by recovered data and LSP responses."""
+
     start_line: int
     start_character: int
     end_line: int
@@ -40,6 +48,8 @@ class Span:
 
 @dataclass(frozen=True, slots=True)
 class TargetDef:
+    """Recovered target definition from a Make rule header."""
+
     name: str
     name_span: Span
     rule_span: Span
@@ -51,6 +61,8 @@ class TargetDef:
 
 @dataclass(frozen=True, slots=True)
 class VarDef:
+    """Recovered variable assignment plus any attached comment documentation."""
+
     name: str
     name_span: Span
     assignment_span: Span
@@ -61,12 +73,16 @@ class VarDef:
 
 @dataclass(frozen=True, slots=True)
 class VarGuard:
+    """Simple variable guard inferred from a top-level conditional branch."""
+
     name: str
     kind: VarGuardKind
 
 
 @dataclass(frozen=True, slots=True)
 class SymCtx:
+    """Local form and guard context for a recovered symbol occurrence."""
+
     form_kind: FormKind
     kind: SymCtxKind
     active_guards: tuple[VarGuard, ...] = ()
@@ -74,12 +90,16 @@ class SymCtx:
 
 @dataclass(frozen=True, slots=True)
 class DocForm:
+    """Recovered top-level form span used by diagnostics and fixes."""
+
     kind: FormKind
     span: Span
 
 
 @dataclass(frozen=True, slots=True)
 class SymOcc:
+    """Recovered target or variable occurrence consumed by editor features."""
+
     kind: SymKind
     role: SymRole
     name: str
@@ -89,6 +109,8 @@ class SymOcc:
 
 @dataclass(frozen=True, slots=True)
 class RecipeLine:
+    """Recipe line with both raw source text and shell-check command text."""
+
     span: Span
     raw_text: str
     command_text: str
@@ -98,6 +120,8 @@ class RecipeLine:
 
 @dataclass(frozen=True, slots=True)
 class AnalyzedDoc:
+    """Single-file analysis snapshot shared across diagnostics and LSP features."""
+
     uri: str
     version: int | None
     targets: dict[str, tuple[TargetDef, ...]]
@@ -109,6 +133,7 @@ class AnalyzedDoc:
     diagnostics: tuple[lsp.Diagnostic, ...]
 
     def occurrence_at(self, line: int, character: int) -> SymOcc | None:
+        """Return the recovered occurrence covering a source position, if any."""
         for occurrence in self.occurrences:
             if occurrence.span.contains(line, character):
                 return occurrence
