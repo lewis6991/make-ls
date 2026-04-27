@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.5.0](https://github.com/lewis6991/make-ls/compare/v0.4.0...v0.5.0) (2026-04-27)
+
+
+### Features
+
+* add document highlights ([1403fed](https://github.com/lewis6991/make-ls/commit/1403fed0f2bf754deefd1ef3fb9515f8e7343f46))
+* add Makefile completion ([b845246](https://github.com/lewis6991/make-ls/commit/b845246ed5b078c7e6cd08a6a929fabcd3fdda7a))
+* add more Makefile LSP features ([6c8df64](https://github.com/lewis6991/make-ls/commit/6c8df64238f873f2e70e748c2712d4bf16152358))
+* add VS Code extension ([6dda89c](https://github.com/lewis6991/make-ls/commit/6dda89cdb50671290a9192c33dcd941e7015daa6))
+
+
+### Documentation
+
+* split user and contributor documentation ([9e7c1f8](https://github.com/lewis6991/make-ls/commit/9e7c1f87ac0c3588710b57ca6f0336fd8801878d))
+
 ## [0.4.0](https://github.com/lewis6991/make-ls/compare/v0.3.0...v0.4.0) (2026-04-23)
 
 
