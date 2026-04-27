@@ -197,6 +197,20 @@ class LspSession:
             return result
         return [location for location in result if isinstance(location, lsp.Location)]
 
+    async def document_highlight(
+        self,
+        uri: str,
+        line: int,
+        character: int,
+    ) -> list[lsp.DocumentHighlight] | None:
+        result = await self.client.text_document_document_highlight_async(
+            lsp.DocumentHighlightParams(
+                text_document=lsp.TextDocumentIdentifier(uri=uri),
+                position=lsp.Position(line=line, character=character),
+            )
+        )
+        return None if result is None else list(result)
+
     async def references(
         self,
         uri: str,

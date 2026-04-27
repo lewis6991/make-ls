@@ -1,4 +1,4 @@
-"""Definition, references, and rename handlers."""
+"""Definition, references, highlights, and rename handlers."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from lsprotocol import types as lsp
 
 from make_ls.analysis.navigation import (
     def_for_pos,
+    highlights_for_pos,
     prep_rename_for_pos,
     refs_for_pos,
     rename_var_for_pos,
@@ -23,6 +24,7 @@ LOGGER = logging.getLogger(__name__)
 
 def register(server: FeatureServer) -> None:
     _ = server.feature(lsp.TEXT_DOCUMENT_DEFINITION)(definition)
+    _ = server.feature(lsp.TEXT_DOCUMENT_DOCUMENT_HIGHLIGHT)(document_highlight)
     _ = server.feature(lsp.TEXT_DOCUMENT_REFERENCES)(references)
     _ = server.feature(lsp.TEXT_DOCUMENT_PREPARE_RENAME)(prepare_rename)
     _ = server.feature(lsp.TEXT_DOCUMENT_RENAME)(rename)
@@ -59,6 +61,35 @@ def definition(
         len(documents) - 1,
     )
     return definition_result
+
+
+def document_highlight(
+    ls: FeatureServer,
+    params: lsp.DocumentHighlightParams,
+) -> list[lsp.DocumentHighlight] | None:
+    document = ls.analyze_uri(params.text_document.uri)
+    workspace = cast('WorkspaceProtocol', ls.workspace)
+    text_document = workspace.get_text_document(params.text_document.uri)
+    occurrence = document.occurrence_at(params.position.line, params.position.character)
+    related_documents: tuple[AnalyzedDoc, ...] = ()
+    if occurrence is not None and occurrence.kind in {'target', 'variable'}:
+        related_documents = ls.included_documents(params.text_document.uri)[1:]
+
+    highlight_result = highlights_for_pos(
+        document,
+        params.position,
+        tuple(text_document.source.splitlines()),
+        related_documents,
+    )
+    LOGGER.debug(
+        'textDocument/documentHighlight uri=%s position=%d:%d highlights=%d includes=%d',
+        params.text_document.uri,
+        params.position.line + 1,
+        params.position.character + 1,
+        0 if highlight_result is None else len(highlight_result),
+        len(related_documents),
+    )
+    return highlight_result
 
 
 def references(ls: FeatureServer, params: lsp.ReferenceParams) -> list[lsp.Location] | None:

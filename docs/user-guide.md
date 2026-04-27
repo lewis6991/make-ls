@@ -14,6 +14,7 @@ diagnostics and symbol understanding stay close across editor and CLI use.
   targets
 - signature help for builtin GNU Make functions
 - go to definition for targets and variables
+- document highlights for targets and variables
 - references for targets and variables
 - variable rename with prepare-rename support
 - document symbols for targets and variables

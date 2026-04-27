@@ -1,4 +1,4 @@
-"""Definition, reference, and rename logic over the recovered document model.
+"""Definition, references, highlights, and rename logic over the recovered model.
 
 Navigation reads `AnalyzedDoc` directly instead of reparsing the buffer.
 Variable rename stays single-document, while target navigation can traverse
@@ -106,6 +106,55 @@ def refs_for_pos(
         ),
         include_declaration=include_declaration,
     )
+
+
+def highlights_for_pos(
+    document: AnalyzedDoc,
+    position: lsp.Position,
+    source_lines: tuple[str, ...],
+    related_documents: tuple[AnalyzedDoc, ...] = (),
+) -> list[lsp.DocumentHighlight] | None:
+    locations = refs_for_pos(
+        document,
+        position,
+        source_lines,
+        related_documents,
+        include_declaration=True,
+    )
+    if not locations:
+        return None
+
+    local_ranges = {
+        _range_key(location.range) for location in locations if location.uri == document.uri
+    }
+    if not local_ranges:
+        return None
+
+    highlights: list[tuple[int, int, lsp.DocumentHighlight]] = []
+    seen_ranges: set[tuple[int, int, int, int]] = set()
+    for occurrence in document.occurrences:
+        highlight_span = _highlight_span_for_occurrence(occurrence, source_lines)
+        if highlight_span is None:
+            continue
+
+        range_key = _span_key(highlight_span)
+        if range_key not in local_ranges or range_key in seen_ranges:
+            continue
+
+        highlights.append(
+            (
+                highlight_span.start_line,
+                highlight_span.start_character,
+                lsp.DocumentHighlight(
+                    range=highlight_span.to_lsp_range(),
+                    kind=_highlight_kind(occurrence),
+                ),
+            )
+        )
+        seen_ranges.add(range_key)
+
+    highlights.sort(key=lambda entry: (entry[0], entry[1]))
+    return [highlight for _line, _character, highlight in highlights] or None
 
 
 def prep_rename_for_pos(
@@ -483,6 +532,39 @@ def _append_location(
 
     locations.append(lsp.Location(uri=uri, range=span.to_lsp_range()))
     seen.add(key)
+
+
+def _highlight_span_for_occurrence(
+    occurrence: SymOcc,
+    source_lines: tuple[str, ...],
+) -> Span | None:
+    if occurrence.kind == 'target':
+        return occurrence.span
+    return _variable_name_span_for_occurrence(occurrence, source_lines)
+
+
+def _highlight_kind(occurrence: SymOcc) -> lsp.DocumentHighlightKind:
+    if occurrence.role == 'definition':
+        return lsp.DocumentHighlightKind.Write
+    return lsp.DocumentHighlightKind.Read
+
+
+def _range_key(range_: lsp.Range) -> tuple[int, int, int, int]:
+    return (
+        range_.start.line,
+        range_.start.character,
+        range_.end.line,
+        range_.end.character,
+    )
+
+
+def _span_key(span: Span) -> tuple[int, int, int, int]:
+    return (
+        span.start_line,
+        span.start_character,
+        span.end_line,
+        span.end_character,
+    )
 
 
 def _matches_target_name(name: str, target_name: str) -> bool:
