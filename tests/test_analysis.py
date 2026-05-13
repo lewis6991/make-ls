@@ -76,6 +76,19 @@ def test_analyze_document_recovers_grouped_targets_with_late_separator() -> None
     assert document.diagnostics == ()
 
 
+def test_analyze_document_recovers_tab_indented_continued_target_header() -> None:
+    document = analyze_document(
+        'file:///Makefile',
+        None,
+        'target1 \\\n\ttarget2:\n\t@echo ok\n',
+    )
+
+    assert set(document.targets) == {'target1', 'target2'}
+    assert document.targets['target1'][0].name_span.start_line == 0
+    assert document.targets['target2'][0].name_span.start_line == 1
+    assert document.diagnostics == ()
+
+
 def test_analyze_document_allows_direct_recipe_local_eval_variables() -> None:
     document = analyze_document(
         'file:///Makefile',

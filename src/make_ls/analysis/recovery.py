@@ -585,8 +585,6 @@ def _recover_rule(
         header_end_line + 1 < len(source_lines)
     ):
         next_line = source_lines[header_end_line + 1]
-        if next_line.startswith('\t'):
-            break
         header_lines.append(next_line)
         header_end_line += 1
 
