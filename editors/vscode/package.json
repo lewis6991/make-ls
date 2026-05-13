@@ -2,7 +2,7 @@
   "name": "make-ls-vscode",
   "displayName": "make-ls",
   "description": "VS Code extension for the make-ls language server.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "publisher": "lewis6991",
   "license": "MIT",
