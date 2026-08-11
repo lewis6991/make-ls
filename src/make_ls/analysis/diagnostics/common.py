@@ -237,7 +237,12 @@ def _extend_included_variable_names(
     except (OSError, UnicodeDecodeError):
         return
 
-    assignment_recovery = recover_variable_assignments(source_lines, {})
+    rule_recovery = recover_rules(source_lines, {})
+    assignment_recovery = recover_variable_assignments(
+        source_lines,
+        {},
+        rule_recovery.parsed_lines,
+    )
     variable_names.update(definition.name for definition in assignment_recovery.definitions)
 
     include_recovery = recover_include_directives(source_lines)

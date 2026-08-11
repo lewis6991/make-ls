@@ -89,6 +89,37 @@ def test_analyze_document_recovers_tab_indented_continued_target_header() -> Non
     assert document.diagnostics == ()
 
 
+def test_analyze_document_recovers_tab_indented_conditional_assignments() -> None:
+    document = analyze_document(
+        'file:///Makefile',
+        None,
+        (
+            'ifeq ($(shell uname -m),arm64)\n'
+            '\tARCH ?= arm64\n'
+            'else\n'
+            '\tARCH ?= x64\n'
+            'endif\n'
+            'OUT := $(ARCH)\n'
+        ),
+    )
+
+    assert [definition.name_span.start_line for definition in document.variables['ARCH']] == [1, 3]
+    assert document.diagnostics == ()
+
+
+def test_analyze_document_does_not_recover_recipe_shell_assignment() -> None:
+    document = analyze_document(
+        'file:///Makefile',
+        None,
+        'all:\n\tRECIPE_ONLY=value\nother:\n\t@echo $(RECIPE_ONLY)\n',
+    )
+
+    assert 'RECIPE_ONLY' not in document.variables
+    assert [diagnostic.message for diagnostic in document.diagnostics] == [
+        'Unknown variable reference: `$(RECIPE_ONLY)`'
+    ]
+
+
 def test_analyze_document_allows_direct_recipe_local_eval_variables() -> None:
     document = analyze_document(
         'file:///Makefile',

@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 COMMENT_RE = re.compile(r'^[ ]*#(?P<text>.*)$')
 TOKEN_RE = re.compile(r'\S+')
 ASSIGNMENT_RE = re.compile(
-    r'^(?P<leading>[ ]*)(?P<prefix>(?:(?:export|override|private)\s+)*)'
+    r'^(?P<leading>[ \t]*)(?P<prefix>(?:(?:export|override|private)\s+)*)'
     r'(?P<name>[A-Za-z0-9_.%/@+-]+)'
     r'[ ]*(?P<operator>[:+?!]?=)[ ]*(?P<value>.*)$'
 )
@@ -313,6 +313,7 @@ def recover_include_directives(source_lines: list[str]) -> IncludeRecovery:
 def recover_variable_assignments(
     source_lines: list[str],
     line_guards: dict[int, tuple[VarGuard, ...]],
+    rule_lines: frozenset[int],
 ) -> AssignmentRecovery:
     definitions: list[VarDef] = []
     occurrences: list[SymOcc] = []
@@ -335,7 +336,10 @@ def recover_variable_assignments(
             line_number += 1
             continue
 
-        if line.startswith('\t') or continues_previous_top_level_line(source_lines, line_number):
+        if line_number in rule_lines or continues_previous_top_level_line(
+            source_lines,
+            line_number,
+        ):
             line_number += 1
             continue
 

@@ -52,6 +52,7 @@ def analyze_document(
     assignment_recovery = recover_variable_assignments(
         source_lines,
         conditional_recovery.line_guards,
+        rule_recovery.parsed_lines,
     )
 
     for definition in rule_recovery.definitions:
