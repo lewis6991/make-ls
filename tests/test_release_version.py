@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from typing import cast
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -16,7 +18,18 @@ def _read_json_object(path: Path) -> dict[str, object]:
     return cast('dict[str, object]', value)
 
 
-def test_stamp_updates_json_versions_and_removes_resolved_urls(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ('release_version', 'vscode_version'),
+    [
+        ('1.2.3', '1.2.3'),
+        ('1.2.4.dev7', '1.2.4-dev.7'),
+    ],
+)
+def test_stamp_updates_json_versions_and_removes_resolved_urls(
+    tmp_path: Path,
+    release_version: str,
+    vscode_version: str,
+) -> None:
     project = tmp_path / 'project'
     script_path = project / 'scripts' / 'release_version.py'
     _ = script_path.parent.mkdir(parents=True)
@@ -60,7 +73,7 @@ def test_stamp_updates_json_versions_and_removes_resolved_urls(tmp_path: Path) -
     )
 
     result = subprocess.run(
-        [sys.executable, str(script_path), 'stamp', '1.2.3'],
+        [sys.executable, str(script_path), 'stamp', release_version],
         check=False,
         capture_output=True,
         text=True,
@@ -69,10 +82,10 @@ def test_stamp_updates_json_versions_and_removes_resolved_urls(tmp_path: Path) -
     assert result.returncode == 0, result.stderr
     assert _read_json_object(package_json_path) == {
         'name': 'make-ls',
-        'version': '1.2.3',
+        'version': vscode_version,
     }
     assert _read_json_object(package_lock_path) == {
-        'version': '1.2.3',
-        'packages': {'': {'version': '1.2.3'}},
+        'version': vscode_version,
+        'packages': {'': {'version': vscode_version}},
         'dependencies': {'example': {}},
     }

@@ -122,22 +122,24 @@ def _replace_pattern(path: Path, pattern: re.Pattern[str], replacement: str) -> 
 
 
 def _update_json_versions(version: str) -> None:
+    # Python uses PEP 440 dev versions; VS Code extension manifests require SemVer.
+    vscode_version = _vscode_version(version)
     package_json = _read_json_object(VSCODE_PACKAGE_JSON_PATH)
-    package_json['version'] = version
+    package_json['version'] = vscode_version
     _ = VSCODE_PACKAGE_JSON_PATH.write_text(
         json.dumps(package_json, indent=2) + '\n',
         encoding='utf-8',
     )
 
     package_lock = _strip_package_lock_resolved(_read_json_object(VSCODE_PACKAGE_LOCK_PATH))
-    package_lock['version'] = version
+    package_lock['version'] = vscode_version
     packages = package_lock.get('packages')
     if isinstance(packages, dict):
         packages = cast('dict[str, object]', packages)
         root_package = packages.get('')
         if isinstance(root_package, dict):
             root_package = cast('dict[str, object]', root_package)
-            root_package['version'] = version
+            root_package['version'] = vscode_version
     _ = VSCODE_PACKAGE_LOCK_PATH.write_text(
         json.dumps(package_lock, indent=2) + '\n',
         encoding='utf-8',
@@ -149,6 +151,15 @@ def _read_json_object(path: Path) -> dict[str, object]:
     if not isinstance(value, dict):
         raise TypeError(f'expected JSON object in {path}')
     return cast('dict[str, object]', value)
+
+
+def _vscode_version(version: str) -> str:
+    match = _DEV_VERSION_PATTERN.fullmatch(version)
+    if match is None:
+        return version
+
+    major, minor, patch, run_number = match.groups()
+    return f'{major}.{minor}.{patch}-dev.{run_number}'
 
 
 def _strip_package_lock_resolved(value: dict[str, object]) -> dict[str, object]:
