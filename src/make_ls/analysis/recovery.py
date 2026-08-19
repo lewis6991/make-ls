@@ -849,6 +849,8 @@ def _recover_variable_references_from_text(
 ) -> list[SymOcc]:
     occurrences: list[SymOcc] = []
     for reference in VARIABLE_REFERENCE_RE.finditer(text):
+        if _is_escaped_variable_reference(text, reference.start()):
+            continue
         reference_name = reference.group('paren') or reference.group('brace')
         if reference_name is None:
             continue
@@ -867,7 +869,7 @@ def _recover_variable_references_from_text(
             )
         )
     for reference in SIMPLE_AUTOMATIC_VARIABLE_RE.finditer(text):
-        if reference.start() > 0 and text[reference.start() - 1] == '$':
+        if _is_escaped_variable_reference(text, reference.start()):
             continue
 
         occurrences.append(
@@ -886,6 +888,14 @@ def _recover_variable_references_from_text(
         )
     occurrences.sort(key=lambda occurrence: occurrence.span.start_character)
     return occurrences
+
+
+def _is_escaped_variable_reference(text: str, start: int) -> bool:
+    # Make turns each $$ into a literal $. An odd preceding run escapes this $.
+    preceding_dollars = 0
+    while start > preceding_dollars and text[start - preceding_dollars - 1] == '$':
+        preceding_dollars += 1
+    return preceding_dollars % 2 == 1
 
 
 def _recover_include_paths(

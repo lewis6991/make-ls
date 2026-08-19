@@ -120,6 +120,53 @@ def test_analyze_document_does_not_recover_recipe_shell_assignment() -> None:
     ]
 
 
+def test_analyze_document_does_not_treat_recipe_command_substitution_as_make_variable() -> None:
+    document = analyze_document(
+        'file:///Makefile',
+        None,
+        'all:\n\tarchive=$$(mktemp)\n',
+    )
+
+    assert document.diagnostics == ()
+
+
+@pytest.mark.parametrize(
+    ('source', 'expected_codes'),
+    [
+        ('OUTPUT := $$(MISSING)\n', ()),
+        ('OUTPUT := $$$(MISSING)\n', ('unknown-variable',)),
+        ('OUTPUT := $$@\n', ()),
+        ('OUTPUT := $$$@\n', ('automatic-variable-outside-recipe',)),
+    ],
+)
+def test_analyze_document_respects_double_dollar_escaping(
+    source: str,
+    expected_codes: tuple[str, ...],
+) -> None:
+    document = analyze_document('file:///Makefile', None, source)
+
+    assert tuple(diagnostic.code for diagnostic in document.diagnostics) == expected_codes
+
+
+@pytest.mark.parametrize(
+    ('source', 'expected_references'),
+    [
+        ('OUTPUT := $${MISSING}\n', []),
+        ('OUTPUT := $$${MISSING}\n', ['MISSING']),
+    ],
+)
+def test_analyze_document_respects_double_dollar_escaping_in_brace_references(
+    source: str,
+    expected_references: list[str],
+) -> None:
+    document = analyze_document('file:///Makefile', None, source)
+
+    references = [
+        occurrence.name for occurrence in document.occurrences if occurrence.role == 'reference'
+    ]
+    assert references == expected_references
+
+
 def test_analyze_document_allows_direct_recipe_local_eval_variables() -> None:
     document = analyze_document(
         'file:///Makefile',
