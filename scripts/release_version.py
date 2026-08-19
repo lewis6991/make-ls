@@ -122,36 +122,49 @@ def _replace_pattern(path: Path, pattern: re.Pattern[str], replacement: str) -> 
 
 
 def _update_json_versions(version: str) -> None:
-    package_json = json.loads(VSCODE_PACKAGE_JSON_PATH.read_text(encoding='utf-8'))
+    package_json = _read_json_object(VSCODE_PACKAGE_JSON_PATH)
     package_json['version'] = version
     _ = VSCODE_PACKAGE_JSON_PATH.write_text(
         json.dumps(package_json, indent=2) + '\n',
         encoding='utf-8',
     )
 
-    package_lock = json.loads(VSCODE_PACKAGE_LOCK_PATH.read_text(encoding='utf-8'))
-    package_lock = _strip_package_lock_resolved(package_lock)
+    package_lock = _strip_package_lock_resolved(_read_json_object(VSCODE_PACKAGE_LOCK_PATH))
     package_lock['version'] = version
-    if package_lock.get('packages', {}).get('') is not None:
-        package_lock['packages']['']['version'] = version
+    packages = package_lock.get('packages')
+    if isinstance(packages, dict):
+        packages = cast('dict[str, object]', packages)
+        root_package = packages.get('')
+        if isinstance(root_package, dict):
+            root_package = cast('dict[str, object]', root_package)
+            root_package['version'] = version
     _ = VSCODE_PACKAGE_LOCK_PATH.write_text(
         json.dumps(package_lock, indent=2) + '\n',
         encoding='utf-8',
     )
 
 
-def _strip_package_lock_resolved(value: object) -> object:
+def _read_json_object(path: Path) -> dict[str, object]:
+    value = cast('object', json.loads(path.read_text(encoding='utf-8')))
+    if not isinstance(value, dict):
+        raise TypeError(f'expected JSON object in {path}')
+    return cast('dict[str, object]', value)
+
+
+def _strip_package_lock_resolved(value: dict[str, object]) -> dict[str, object]:
+    return {
+        key: _strip_package_lock_value(item) for key, item in value.items() if key != 'resolved'
+    }
+
+
+def _strip_package_lock_value(value: object) -> object:
     if isinstance(value, list):
-        return [_strip_package_lock_resolved(item) for item in value]
+        values = cast('list[object]', value)
+        return [_strip_package_lock_value(item) for item in values]
     if not isinstance(value, dict):
         return value
 
-    cleaned: dict[str, object] = {}
-    for key, item in value.items():
-        if key == 'resolved':
-            continue
-        cleaned[key] = _strip_package_lock_resolved(item)
-    return cleaned
+    return _strip_package_lock_resolved(cast('dict[str, object]', value))
 
 
 if __name__ == '__main__':
